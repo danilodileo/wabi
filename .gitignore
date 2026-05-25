@@ -8,3 +8,6 @@ data-analysis/data/
 data-analysis/.RData
 data-analysis/.RDataTmp*
 NBIS-J_Pinhassi_2305/
+.Rproj.user
+.positai
+data-analysis/.Rproj.*

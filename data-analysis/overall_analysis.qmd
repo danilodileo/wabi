@@ -83,6 +83,7 @@ library(igraph)
 library(ggplotify)
 library("ComplexHeatmap")
 library(networkD3)
+library(htmltools)
 ```
 
 ## Load datasets
@@ -193,6 +194,7 @@ The figure below shows that metaP covers max 2,8% of the metaG and max \~4% of 
 
 ```{r relative-abundande-omics}
 
+# Calculate avg tpm
 avg_tpm <- meta_match %>%
   group_by(sample) %>%
   select(-tpm_p) %>%
@@ -210,6 +212,7 @@ avg_tpm <- meta_match %>%
     se_tpm = sd_tpm / sqrt(n())
   )
 
+# plot the results
 ggplot(avg_tpm, aes(x = omic, y = mean_tpm)) +
   geom_point(size = 4) +
   geom_errorbar(aes(ymin = mean_tpm - se_tpm,
@@ -227,6 +230,7 @@ Let's try an iterative process of randomise same amount of ORFs to see if I get 
 4.  plot the results
 
 ```{r select-which-samples-to-include}
+# prepare unified table 
 mm_dt <- as.data.table(meta_match)
 ann_dt <- as.data.table(annotation)
 tax_dt <- as.data.table(taxonomy)
@@ -279,7 +283,7 @@ boot_results <- map_dfr(1:n_iter, function(i) {
            iteration = i)
 })
 
-# Intervalli di confidenza per campione
+# IC per sample
 boot_summary <- boot_results |>
   group_by(sample) |>
   summarise(
@@ -287,11 +291,6 @@ boot_summary <- boot_results |>
     ci_low  = quantile(pct_random, 0.025),
     ci_high = quantile(pct_random, 0.975)
   )
-
-# Confronto finale
-# coverage |>
-#   select(sample, pct_matched) |>
-#   left_join(boot_summary, by = "sample")
 ```
 
 ```{r iterate-for-metag}
@@ -318,12 +317,6 @@ boot_summary_g <- boot_results_g |>
     ci_low  = quantile(pct_random, 0.025),
     ci_high = quantile(pct_random, 0.975)
   )
-
-# coverage_g |>
-#   select(sample, pct_matched) |>
-#   left_join(boot_summary_g, by = "sample")
-
-
 ```
 
 ```{r plot-results}
@@ -350,6 +343,7 @@ coverage_combined <- bind_rows(
     select(sample, layer, subset, pct_coverage)
 )
 
+# Show coverage
 ggplot(coverage_combined, aes(x = layer, y = pct_coverage, fill = subset)) +
   geom_boxplot(width = 0.5, outlier.shape = NA) +
   scale_y_log10() +
@@ -377,7 +371,7 @@ Two non-mutually exclusive explanations are possible:
 Distinguishing between these two hypotheses requires examination of the functional annotations of the top correlated ORFs (Step 5), which will clarify whether the detected proteome is enriched for specific functional categories or reflects a broad taxonomic cross-section of the dominant community members.
 
 ```{r concordance-phylum-family-correlation}
-# Tabella: famiglie significative per phylum
+# Table: filter for significance per phylum
 family_table <- corr_mp_mt_fam |>
   filter(p_adjust < 0.05) |>
   group_by(superkingdom, phylum) |>
@@ -396,7 +390,7 @@ background <- meta_match_ann %>%
     n_total = n()) %>%
   arrange(desc(n_total))
 
-# Join con famiglie significative
+# Join with sig family
 overrep_table.1 <- background |>
   left_join(family_table |> select(phylum, n_families, mean_corr, median_corr), 
             by = "phylum") |>
@@ -432,7 +426,7 @@ background.2 <- meta_match_ann %>%
     n_total = n()) %>%
   arrange(desc(n_total))
 
-# Join con famiglie significative
+# Join with sig fam
 overrep_table.2 <- background.2 |>
   left_join(genome_table |> select(phylum, family, n_genomes, mean_corr, median_corr), 
             by = "family") |>
@@ -462,19 +456,19 @@ family_flow <- overrep_table.2 |>
 links_all <- family_flow |>
   rename(source = phylum, target = family, value = n_genomes)
 
-# Nodi unici
+# Unique nodes
 nodes <- data.frame(
   name = unique(c(links_all$source, links_all$target))
 )
 
-# Indici 0-based
+# Indices 0-based
 links_all <- links_all |>
   mutate(
     source = match(source, nodes$name) - 1,
     target = match(target, nodes$name) - 1
   )
 
-# Colori
+# Colors
 nodes <- nodes |>
   mutate(color = case_when(
     name == "Pseudomonadota"    ~ "#5DCAA5",
@@ -536,7 +530,7 @@ background.3 <- meta_match_ann %>%
     n_total = n()) %>%
   arrange(desc(n_total))
 
-# Join con famiglie significative
+# Join w sig fam
 overrep_table <- background.3 |>
   left_join(orf_table |> select(genome, n_orf, mean_corr, median_corr), 
             by = "genome") |>
@@ -587,8 +581,7 @@ genome_flow <- overrep_table |>
 
 library(networkD3)
 
-# Prepara i dati - assicurati di avere genome_flow con colonne: genome, family, phylum, n_orf
-# Costruisci i link phylum -> family -> genome
+# Build link phylum -> family -> genome
 links_pf <- genome_flow |>
   group_by(phylum, family) |>
   summarise(value = sum(n_orf), .groups = "drop") |>
@@ -600,19 +593,19 @@ links_fg <- genome_flow |>
 
 links_all <- bind_rows(links_pf, links_fg)
 
-# Costruisci nodi unici
+# Build unique code
 nodes <- data.frame(
   name = unique(c(links_all$source, links_all$target))
 )
 
-# Converti source/target in indici numerici (0-based)
+# convert source/target in indexes (0-based)
 links_all <- links_all |>
   mutate(
     source = match(source, nodes$name) - 1,
     target = match(target, nodes$name) - 1
   )
 
-# Aggiungi colore come colonna nel dataframe nodes
+# Add colors in the columns
 nodes <- nodes |>
   mutate(color = case_when(
     name == "Pseudomonadota"    ~ "#5DCAA5",
@@ -624,7 +617,7 @@ nodes <- nodes |>
     TRUE ~ "#B4B2A9"
   ))
 
-# Costruisci stringa colori per JS
+# Build color string per JS
 color_scale <- paste0(
   'd3.scaleOrdinal().domain([',
   paste0('"', nodes$name, '"', collapse = ","),
@@ -649,10 +642,7 @@ p <- sankeyNetwork(
   height = 600
 )
 
-library(htmltools)
-
-
-# Aggiungi titolo
+# Aggiungi title
 htmlwidgets::prependContent(
   p,
   htmltools::tags$h3(
@@ -664,7 +654,7 @@ htmlwidgets::prependContent(
 ```
 
 ```{r sankey-plot-orf-level-proportion }
-# Aggiungi class e order, calcola proporzione
+# Add class and order
 genome_f <- overrep_table |>
   left_join(
     taxonomy %>%
@@ -703,7 +693,7 @@ nodes <- data.frame(
   name = unique(c(links_all$source, links_all$target))
 )
 
-# Colori per class
+# Color per class
 nodes <- nodes |>
   mutate(color = case_when(
     name %in% unique(genome_flow$class) ~ case_when(
@@ -727,7 +717,7 @@ color_scale <- paste0(
   '])'
 )
 
-# Converti in indici 0-based
+# Convert in indices 0-based
 links_all <- links_all |>
   mutate(
     source = match(source, nodes$name) - 1,
@@ -865,7 +855,7 @@ corr_mp_mt_ko <- corr_mp_mt %>%
   left_join(ko, join_by(orf)) %>%
   filter(p_adjust < 0.05)
 
-# Scarica mapping KO -> pathway
+# download mapping KO -> pathway
 download.file(
   "https://rest.kegg.jp/link/pathway/ko",
   "ko_pathway.txt"
@@ -881,7 +871,7 @@ ko_pathway <- read_tsv("ko_pathway.txt",
   filter(str_starts(pathway, "map"))
 
 
-# Pathway rappresentati nei KO correlanti
+# Pathways in corr KO
 ko_pathway_summary <- corr_mp_mt_ko |>
   filter(!is.na(ko), p_adjust < 0.05) |>
   left_join(ko_pathway, by = "ko") |>
@@ -901,6 +891,7 @@ ko_pathway_plot <- ko_pathway_summary |>
   head(20) |>
   mutate(name = fct_reorder(name, n_ko))
 
+# Plot
 ggplot(ko_pathway_plot, aes(x = n_ko, y = name)) +
   geom_col(fill = "#1D9E75", width = 0.7) +
   geom_text(aes(label = n_orf), hjust = -0.3, size = 3.5) +
@@ -916,7 +907,7 @@ ggplot(ko_pathway_plot, aes(x = n_ko, y = name)) +
 ```
 
 ```{r ko-analysis-with-proportion}
-# Tutti i KO nel subset metaP-matched (significativi e non)
+# all KOs in metaP-matched (sig e non)
 ko_pathway_all <- meta_match_ko |>
   filter(!is.na(ko)) |>
   filter(!is.na(pathway)) |>
@@ -928,7 +919,7 @@ ko_pathway_all <- meta_match_ko |>
     .groups = "drop"
   )
 
-# Join con i correlanti e calcola proporzione
+# Join w cor and add proportion
 ko_pathway_prop_orf <- ko_pathway_summary |>
   filter(!pathway %in% c("map01100", "map01110", "map01120", "map01200", "map01230")) |>
   left_join(ko_pathway_all, by = c("pathway", "name")) |>
@@ -1002,7 +993,7 @@ ko_tax_summary <- corr_mp_mt_ko |>
   ) |>
   arrange(desc(n_orf))
 
-# Prepara matrice per heatmap
+# build matrix per heatmap
 heatmap_data <- corr_mp_mt_ko |>
   filter(!is.na(ko), p_adjust < 0.05) |>
   left_join(ko_pathway, by = "ko") |>
@@ -1054,7 +1045,7 @@ Cross-omic concordance is concentrated in a few families with distinct functiona
 Overall: functional concordance between metaT and metaP is not randomly distributed but is taxon-specific, with each dominant family contributing a distinct functional signature.
 
 ```{r genome-level }
-# Filtra alle famiglie dominanti e aggrega per genoma
+# Filter dominant families dominanti and group by genomes
 heatmap_genome <- corr_mp_mt_ko |>
   filter(!is.na(ko), p_adjust < 0.05) |>
   filter(family %in% c("Rhodobacteraceae", "Cyanobiaceae", 
@@ -1078,7 +1069,7 @@ heatmap_genome <- corr_mp_mt_ko |>
     genome_label = paste0(genome, "\n(", genus, ")")
   )
 
-# Plot con facet per famiglia
+# Plot w facet per family
 ggplot(heatmap_genome, aes(x = genome_label, y = name, fill = n_orf)) +
   geom_tile(color = "white", linewidth = 0.3) +
   scale_fill_gradient(low = "#E1F5EE", high = "#085041",
@@ -1097,8 +1088,8 @@ ggplot(heatmap_genome, aes(x = genome_label, y = name, fill = n_orf)) +
   )
 ```
 
-```{r}
-# totale ORF metaP-matched per genome × pathway
+```{r concordance-kegg-pathways-genomes}
+# total ORF metaP-matched per genome × pathway
 total_genome_pathway <- meta_match_ko |>
   filter(!is.na(ko)) |>
   filter(!pathway %in% c("map01100", "map01110", "map01120",
@@ -1107,7 +1098,7 @@ total_genome_pathway <- meta_match_ko |>
   group_by(name, genome) |>
   summarise(n_total = n_distinct(orf), .groups = "drop")
 
-# join con heatmap_genome e calcola proporzione
+# join w heatmap_genome
 heatmap_genome_prop <- heatmap_genome |>
   left_join(total_genome_pathway, by = c("name", "genome")) |>
   mutate(prop_corr = n_orf / n_total)
@@ -1151,7 +1142,7 @@ Within each family, cross-omic concordance is driven by one or few dominant geno
 ### Using only the subset of ORFs
 
 ```{r 16-genomes-distribution-subset}
-# Abbondanza media TPM in metaT per i 16 genomi del plot
+# avg TPM in metaT per 16 genomes
 target_genomes <- unique(heatmap_genome$genome)
 
 genome_tpm <- samples_all3 |>
@@ -1164,13 +1155,13 @@ genome_tpm <- samples_all3 |>
   ) |>
   arrange(desc(mean_tpm))
 
-# Aggiungi n_orf_sig per genoma
+# add n_orf_sig per genome
 genome_orf_sig <- corr_mp_mt_ko |>
   filter(!is.na(ko), p_adjust < 0.05, genome %in% target_genomes) |>
   group_by(genome) |>
   summarise(n_orf_sig = n_distinct(orf), .groups = "drop")
 
-# Join con TPM
+# Join w TPM
 genome_plot <- genome_tpm |>
   left_join(genome_orf_sig, by = "genome") |>
   mutate(genome_label = paste0(genus, "\n(", family, ")"))
@@ -1198,25 +1189,27 @@ ggplot(genome_plot, aes(x = mean_tpm, y = n_orf_sig,
 ```
 
 ```{r 16-genomes-dynamics-subset}
-# Guarda la distribuzione TPM per campione per questi genomi
+# Show TPM distribution per sample
 genome_seasonal <- samples_all3 |>
   filter(genome %in% target_genomes) |>
   group_by(genome, genus, sample, family) |>
   summarise(tpm = sum(tpm_t, na.rm = TRUE), .groups = "drop")
 
-# Aggiungi label solo all'ultimo timepoint
+# add label at the last timepoint
 last_point <- genome_seasonal |>
   group_by(genome) |>
   filter(sample == max(sample)) |>
   ungroup()
 
-# Label al punto di massimo TPM per ogni genoma
+# Label peak TPM/genome
 max_point <- genome_seasonal |>
   group_by(genome) |>
   filter(tpm == max(tpm)) |>
   slice(1) |>
   ungroup()
 
+
+# Plot the resutls
 ggplot(genome_seasonal, aes(x = sample, y = tpm, 
                              group = genome, color = genus)) +
   geom_line(linewidth = 0.8) +
@@ -1252,7 +1245,7 @@ ggplot(genome_seasonal, aes(x = sample, y = tpm,
 
 ```{r among-all-levels}
 #| fig-height: 6.5
-# Livello 1 — tutte le ORF metaT
+# Level 1 — all metaT ORFs
 level1 <- mt_10 |>
   left_join(taxonomy, join_by(orf)) %>%
   filter(genome %in% target_genomes, sample %in% keep_samples) |>
@@ -1260,7 +1253,7 @@ level1 <- mt_10 |>
   summarise(tpm = sum(tpm_t, na.rm = TRUE), .groups = "drop") |>
   mutate(level = "All metaT ORFs")
 
-# Livello 2 — subsets metaP matched
+# Level 2 — subsets metaP matched
 level2 <- samples_all3 |>
   filter(genome %in% target_genomes) |>
   group_by(genome, genus, family, sample) |>
@@ -1273,7 +1266,7 @@ sig_orfs <- corr_mp_mt_ko |>
   pull(orf) |>
   unique()
 
-# Livello 3 — solo ORF significative
+# Level 3 — only sig ORF
 level3 <- samples_all3 |>
   filter(genome %in% target_genomes,
          orf %in% sig_orfs) |>
@@ -1281,13 +1274,13 @@ level3 <- samples_all3 |>
   summarise(tpm = sum(tpm_t, na.rm = TRUE), .groups = "drop") |>
   mutate(level = "Correlated ORFs")
 
-# Combina
+# Combine
 all_levels <- bind_rows(level1, level2, level3) |>
   mutate(level = factor(level, levels = c("All metaT ORFs", 
                                            "MetaP matched ORFs",
                                            "Correlated ORFs")))
 
-# Colori per famiglia
+# Colors per family
 family_colors <- c(
   "Burkholderiaceae"  = "#009E73",
   "Cyanobiaceae"      = "#56B4E9",
@@ -1311,6 +1304,7 @@ all_levels_norm <- all_levels |>
     genome_label = fct_reorder(genome_label, as.integer(family))
   )
 
+# plot the results
 ggplot(all_levels_norm, aes(x = sample, y = tpm_norm,
                              color = level, group = level)) +
   geom_line(linewidth = 0.8) +
@@ -1347,9 +1341,8 @@ ggplot(all_levels_norm, aes(x = sample, y = tpm_norm,
   )
 ```
 
-```{r}
-# Per ogni genoma, calcola quante ORF contribuiscono all'80% del TPM totale
-# (misura di dominanza — poche ORF dominanti = profilo poco rappresentativo)
+```{r overlap-dominant-metat-matched-metap}
+# For every genome, add how many ORFs contribute to 80% total TPM
 
 dominance <- mt_10 |>
   left_join(taxonomy, join_by(orf)) |>
@@ -1402,6 +1395,7 @@ dominant_orfs |>
   arrange(desc(pct_in_metap)) |>
   select(genome, genus, family, n_dominant, pct_in_metap, pct_in_corr)
 
+# Plot dominance plot
 dominant_orfs |>
   left_join(taxonomy |> distinct(genome, genus, family), by = "genome") |>
   mutate(
@@ -1431,7 +1425,7 @@ dominant_orfs |>
   theme(legend.position = "right")
 ```
 
-```{r}
+```{r temporal-concordance}
 # Level 1 exclusive — All metaT ORFs EXCLUDING metaP-matched
 level1_exclusive <- mt_10 |>
   left_join(taxonomy, join_by(orf)) |>
@@ -1442,7 +1436,7 @@ level1_exclusive <- mt_10 |>
   summarise(tpm = sum(tpm_t, na.rm = TRUE), .groups = "drop") |>
   mutate(level = "metaT excl. metaP")
 
-# Combina con i livelli esistenti
+# Combine with existent levels
 all_levels_v2 <- bind_rows(level1, level2, level3, level1_exclusive) |>
   mutate(level = factor(level, levels = c(
     "All metaT ORFs",
@@ -1451,7 +1445,7 @@ all_levels_v2 <- bind_rows(level1, level2, level3, level1_exclusive) |>
     "Correlated ORFs"
   )))
 
-# Normalizza
+# Normalise
 all_levels_v2_norm <- all_levels_v2 |>
   group_by(genome, level) |>
   mutate(tpm_norm = (tpm - min(tpm)) / (max(tpm) - min(tpm))) |>
@@ -1501,10 +1495,8 @@ ggplot(all_levels_v2_norm, aes(x = sample, y = tpm_norm,
     panel.grid.minor = element_blank()
   )
 
-# Per ogni genoma calcola correlazione tra 
-# profilo temporale di All metaT vs Correlated ORFs
+# For each genome, add correlation All metaT vs Correlated ORFs
 level_corr <- all_levels |>
-  # usa tpm grezzo, non normalizzato
   pivot_wider(names_from = level, values_from = tpm) |>
   group_by(genome, genus, family) |>
   summarise(
@@ -1518,6 +1510,8 @@ level_corr <- all_levels |>
                            use = "complete.obs"),
     .groups = "drop"
   )
+
+# Plot the results
 ggplot(level_corr, aes(x = r_all_vs_matched, 
                         y = r_all_vs_corr,
                         color = family,
@@ -1533,7 +1527,7 @@ ggplot(level_corr, aes(x = r_all_vs_matched,
   theme_minimal(base_size = 11)
 ```
 
-```{r}
+```{r top10-genomes-metat-dynamics}
 # Top 10 genomi per TPM totale in metaT con presenza in metaP
 top10_genomes <- mt_10 |>
   left_join(taxonomy, join_by(orf)) |>
@@ -1603,7 +1597,7 @@ ggplot(all_levels_top10, aes(x = sample, y = tpm_norm,
   )
 ```
 
-```{r}
+```{r lm-correlation}
 # aggiungi varianza temporale come predictor
 orfs_variance <- meta_match_ko |>
   group_by(orf) |>
@@ -1769,7 +1763,7 @@ ggplot() +
 
 Among the top 300 most highly expressed ORFs in metaT, only a small fraction is detected in the metaP subset (blue dots) and even fewer show significant metaT/metaP correlation (pink dots). The most highly expressed ORFs in metaT (rank \< 10) are not represented in metaP at all. MetaP-matched ORFs appear from rank \~10 onwards but remain sparse, and correlated ORFs are only visible at rank \> 250 — among the lower end of the top 300. This confirms that metaP does not preferentially capture the most transcriptionally active ORFs in the community.
 
-```{r}
+```{r distribution-abundance-metap-orfs}
 # Aggiungi percentile a orf_rank (su tutte le ORF, non solo top 300)
 orf_rank_full <- orf_rank |>
   filter(mean_tpm > 0) |>
@@ -2139,7 +2133,7 @@ lm_fit <- lm(corr ~ log10(mean_tpm), data = tpm_corr_plot)
 summary(lm_fit)
 ```
 
-```{r}
+```{r calculate-eta2}
 #| warning: false
 # is Taxonomy driving the correlation?
 kruskal.test(corr ~ family, data = meta_match_ko)
@@ -2283,8 +2277,7 @@ eta_squared_pathway
 
 #### Shannon diversity. are major differences within-samples?
 
-```{r}
-library(vegan)
+```{r distribution-abundance-between-samples}
 
 diversity_df <- meta_match_ko |>
   group_by(sample) |>
@@ -2384,7 +2377,7 @@ meta_match_ko |>
   theme_minimal(base_size = 12)
 ```
 
-```{r}
+```{r create-kegg-library}
 library(KEGGREST)
 
 # prendi tutti i KO unici dal tuo dataset
@@ -2411,7 +2404,7 @@ ko_modules <- map_dfr(split(ko_list, ceiling(seq_along(ko_list)/10)), function(b
 ko_modules
 ```
 
-```{r}
+```{r hierarchy-analysis}
 # Funzione per calcolare eta² per ogni livello tassonomico
 calc_eta2 <- function(data, group_var, min_n = 20) {
   d <- data |>
@@ -2464,7 +2457,7 @@ results_hierarchy <- map_dfr(levels_to_test, function(lv) {
 results_hierarchy
 ```
 
-```{r}
+```{r visual-rapresentaiton-hierarchy-analysis}
 tibble(
   level = c("Phylum", "Class", "Order", "Family", "Genome", "ORF"),
   eta2  = c(0.010, 0.017, 0.110, 0.138, 0.328, 0.835)
@@ -2613,27 +2606,4 @@ ggplot(pcoa_df, aes(x = PC1, y = PC2, color = layer, label = format(sample, "%y-
   ) +
   theme_minimal(base_size = 12) +
   theme(legend.position = "top")
-```
-
-```{r}
-# Campioni con metaT e metaP
-samples_mt_mp <- meta_match |>
-  filter(tpm_t > 0, tpm_p > 0) |>
-  distinct(sample) |>
-  pull(sample)
-length(samples_mt_mp)
-
-# Campioni con metaG e metaP
-samples_mg_mp <- meta_match |>
-  filter(tpm_g > 0, tpm_p > 0) |>
-  distinct(sample) |>
-  pull(sample)
-length(samples_mg_mp)
-
-# Campioni con tutti e tre
-samples_all <- meta_match |>
-  filter(tpm_t > 0, tpm_p > 0, tpm_g > 0) |>
-  distinct(sample) |>
-  pull(sample)
-length(samples_all)
 ```
