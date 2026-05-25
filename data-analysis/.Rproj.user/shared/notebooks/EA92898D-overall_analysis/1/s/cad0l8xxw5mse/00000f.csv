@@ -1,0 +1,13 @@
+"0","# Controlla
+samples_all3 |> 
+  summarise(
+    n_rows = n(),
+    n_zero_tpm_p = sum(tpm_p == 0, na.rm = TRUE),
+    n_na_tpm_p = sum(is.na(tpm_p)),
+    n_samples = n_distinct(sample),
+    n_orfs = n_distinct(orf)
+  )
+"
+"2","Error in samples_all3 : 
+  The pipe operator requires a function call as RHS (<input>:4:1)
+"

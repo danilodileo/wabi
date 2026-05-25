@@ -1,0 +1,11 @@
+"0","functional_orfs_temporal <- samples_all3 |>
+  filter(orf %in% functional_orfs$orf) |>
+  left_join(functional_orfs |> select(orf, ko, ko_def, category, genus, family), 
+            by = ""orf"") |>
+  select(orf, sample, tpm_t, tpm_g, tpm_p, ko, ko_def, category, genus, family)
+"
+"1","[1m[33mError[39m in `select()`:[22m
+[33m![39m Can't select columns that don't exist.
+[31m✖[39m Column `genus` doesn't exist.
+[90mRun `]8;;x-r-run:rlang::last_trace()rlang::last_trace()]8;;` to see where the error occurred.[39m
+"

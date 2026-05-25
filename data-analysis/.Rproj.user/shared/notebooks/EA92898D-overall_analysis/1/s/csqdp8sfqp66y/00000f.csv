@@ -1,0 +1,7 @@
+"0","# Quanti KO unici nel background?
+n_distinct(background_ko$ko)
+"
+"1","[1]"
+"1"," 256"
+"1","
+"

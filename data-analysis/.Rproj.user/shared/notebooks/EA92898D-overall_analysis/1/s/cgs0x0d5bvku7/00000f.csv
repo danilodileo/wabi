@@ -1,0 +1,22 @@
+"0","# Verifica i valori
+enrichment |>
+  head(5) |>
+  select(pathway, n_sig, n_background) |>
+  print()
+"
+"1","[38;5;246m# A tibble: 5 × 3[39m
+"
+"1","  pathway  n_sig n_background
+"
+"1","  [3m[38;5;246m<chr>[39m[23m    [3m[38;5;246m<int>[39m[23m        [3m[38;5;246m<int>[39m[23m
+"
+"1","[38;5;250m1[39m map00010     6            6
+"
+"1","[38;5;250m2[39m map00020     8            8
+"
+"1","[38;5;250m3[39m map00030     6            6
+"
+"1","[38;5;250m4[39m map00040     3            3
+"
+"1","[38;5;250m5[39m map00051     3            3
+"

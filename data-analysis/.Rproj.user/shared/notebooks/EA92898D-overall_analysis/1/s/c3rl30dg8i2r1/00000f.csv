@@ -1,0 +1,30 @@
+"0","tibble(
+  level = c(""Expression (TPM)"", ""Family"", ""Genome""),
+  eta2  = c(0.003, 0.14, 0.33),
+  level = factor(level, levels = c(""Expression (TPM)"", ""Family"", ""Genome""))
+) |>
+  ggplot(aes(x = level, y = eta2, fill = level)) +
+  geom_col(width = 0.5, alpha = 0.85) +
+  geom_text(aes(label = scales::percent(eta2, accuracy = 0.1)),
+            vjust = -0.5, size = 4, fontface = ""bold"") +
+  scale_fill_manual(values = c(
+    ""Expression (TPM)"" = ""#D3D1C7"",
+    ""Family""           = ""#1D9E75"",
+    ""Genome""           = ""#085041""
+  )) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 0.42)) +
+  labs(x = NULL, y = ""Variance explained (eta\u00b2 / R\u00b2)"",
+       title = ""Predictors of metaT/metaP concordance"",
+       subtitle = ""Proportion of variance in correlation explained by each factor"") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = ""none"")
+"
+"1","[1m[33mError[39m in `tibble()`:[22m
+[38;5;232m[33m![38;5;232m Column name `level` must not be duplicated.
+Use `.name_repair` to specify repair.[39m
+[1mCaused by error in `repaired_names()`:[22m
+[33m![39m Names must be unique.
+[31m✖[39m These names are duplicated:
+  * ""level"" at locations 1 and 3.
+[90mRun `]8;;x-r-run:rlang::last_trace()rlang::last_trace()]8;;` to see where the error occurred.[39m
+"

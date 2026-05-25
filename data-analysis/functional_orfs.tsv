@@ -1,0 +1,32 @@
+orf	ko	ko_def	category	genome	family	genus
+AHLMLIII_00293	K02040	phosphate transport system substrate-binding protein	P cycling	LMO161215_bin_7	Nanopelagicaceae	MAG-120802
+BCHNINIL_00184	K03519	aerobic carbon-monoxide dehydrogenase medium subunit [EC:1.2.5.3]	C fixation	LMO160705_bin_7429	S36-B12	WLND01
+BDECEOKF_01020	K03520	aerobic carbon-monoxide dehydrogenase large subunit [EC:1.2.5.3]	C fixation	LMO160518_bin_11	Burkholderiaceae	RS62
+BDECEOKF_01021	K03518	aerobic carbon-monoxide dehydrogenase small subunit [EC:1.2.5.3]	C fixation	LMO160518_bin_11	Burkholderiaceae	RS62
+BDECEOKF_02470	K03520	aerobic carbon-monoxide dehydrogenase large subunit [EC:1.2.5.3]	C fixation	LMO160518_bin_11	Burkholderiaceae	RS62
+CBAKIAEH_00613	K01602	ribulose-bisphosphate carboxylase small chain [EC:4.1.1.39]	C fixation	LMO161215_bin_942	Unclassified.Gloeomargaritales	Unclassified.Gloeomargaritales
+CBAKIAEH_00614	K01601	ribulose-bisphosphate carboxylase large chain [EC:4.1.1.39]	C fixation	LMO161215_bin_942	Unclassified.Gloeomargaritales	Unclassified.Gloeomargaritales
+CCEGMNBP_00384	K01602	ribulose-bisphosphate carboxylase small chain [EC:4.1.1.39]	C fixation	LMO160920_bin_1404	Unclassified.Archaea	Unclassified.Archaea
+CCEGMNBP_00921	K01601	ribulose-bisphosphate carboxylase large chain [EC:4.1.1.39]	C fixation	LMO160920_bin_1404	Unclassified.Archaea	Unclassified.Archaea
+CHLGDOID_01498	K03519	aerobic carbon-monoxide dehydrogenase medium subunit [EC:1.2.5.3]	C fixation	LMO161215_bin_809	S36-B12	UBA4592
+DCPBGGDH_00072	K03769	peptidyl-prolyl cis-trans isomerase C [EC:5.2.1.8]	Biotin B7	LMO190528_SemiBin_36	Burkholderiaceae	Algicoccus
+DHIONJML_00085	K03518	aerobic carbon-monoxide dehydrogenase small subunit [EC:1.2.5.3]	C fixation	LMO150526_SemiBin_21	Nanopelagicaceae	Planktophila
+DHIONJML_00086	K03520	aerobic carbon-monoxide dehydrogenase large subunit [EC:1.2.5.3]	C fixation	LMO150526_SemiBin_21	Nanopelagicaceae	Planktophila
+DKLCEFBG_00074	K19221	cob(I)alamin adenosyltransferase [EC:2.5.1.17]	Cobalamin B12	LMO190122_SemiBin_52	Rhodobacteraceae	UBA10365
+DKLCEFBG_01001	K01963	acetyl-CoA carboxylase carboxyl transferase subunit beta [EC:6.4.1.2 2.1.3.15]	C fixation	LMO190122_SemiBin_52	Rhodobacteraceae	UBA10365
+DLDBPHFD_01336	K03520	aerobic carbon-monoxide dehydrogenase large subunit [EC:1.2.5.3]	C fixation	LMO161201_bin_51	Ilumatobacteraceae	Casp-actino8
+DLDBPHFD_01694	K02040	phosphate transport system substrate-binding protein	P cycling	LMO161201_bin_51	Ilumatobacteraceae	Casp-actino8
+FIMEIKJK_00019	K01601	ribulose-bisphosphate carboxylase large chain [EC:4.1.1.39]	C fixation	LMO180515_SemiBin_60	Unclassified.Cyanobacteriia	Unclassified.Cyanobacteriia
+ICIIKJEC_02073	K01602	ribulose-bisphosphate carboxylase small chain [EC:4.1.1.39]	C fixation	LMO140312_bin.171	Cyanobiaceae	Synechococcus_D
+JFDNOJKA_00555	K02040	phosphate transport system substrate-binding protein	P cycling	LMO140109_bin.123	Alcanivoracaceae	Alloalcanivorax
+KFBHENKC_00082	K02040	phosphate transport system substrate-binding protein	P cycling	LMO160427_bin_263	Pelagibacteraceae	IMCC9063
+KHJBBFPG_00777	K03518	aerobic carbon-monoxide dehydrogenase small subunit [EC:1.2.5.3]	C fixation	LMO160705_bin_2269	Rhodobacteraceae	Roseicyclus
+MLDFJNFA_00773	K03519	aerobic carbon-monoxide dehydrogenase medium subunit [EC:1.2.5.3]	C fixation	LMO161215_bin_873	S36-B12	UBA4592
+NECBEKGC_03683	K01602	ribulose-bisphosphate carboxylase small chain [EC:4.1.1.39]	C fixation	coassem_bin.1398	Nostocaceae	Nodularia
+NEPHCMNL_01265	K02040	phosphate transport system substrate-binding protein	P cycling	LMO160530_bin_60	Cyanobiaceae	Cyanobium_A
+NKEMDHOD_00586	K02040	phosphate transport system substrate-binding protein	P cycling	LMO161018_bin_1272	Nanopelagicaceae	Nanopelagicus
+NMHCIPIA_00657	K03519	aerobic carbon-monoxide dehydrogenase medium subunit [EC:1.2.5.3]	C fixation	LMO190219_SemiBin_99	Ilumatobacteraceae	UBA3006
+NNKAAJPI_01705	K01602	ribulose-bisphosphate carboxylase small chain [EC:4.1.1.39]	C fixation	LMO170815_bin_104	Pseudanabaenaceae	Pseudanabaena
+OJDDJKLH_00581	K03519	aerobic carbon-monoxide dehydrogenase medium subunit [EC:1.2.5.3]	C fixation	LMO180529_SemiBin_1	Burkholderiaceae	Algicoccus
+ONAFJMBG_00175	K03519	aerobic carbon-monoxide dehydrogenase medium subunit [EC:1.2.5.3]	C fixation	LMO191126_SemiBin_71	Ilumatobacteraceae	UBA2093
+ONFCBIIA_02124	K03520	aerobic carbon-monoxide dehydrogenase large subunit [EC:1.2.5.3]	C fixation	LMO160803_bin_211	Burkholderiaceae	UBA2463

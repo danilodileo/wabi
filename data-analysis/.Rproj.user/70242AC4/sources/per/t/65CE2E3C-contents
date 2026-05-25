@@ -1,0 +1,2639 @@
+---
+title: "overall_analysis"
+author: "[Danilo Di Leo](https://github.com/danilodileo)"
+date: today
+format:
+  html:
+    toc: true
+    toc-title: "Table of Contents"
+    toc-depth: 2
+    toc-location: left
+    number-sections: true
+    code-fold: true
+    code-summary: "Show Code"
+    fig-width: 6
+    fig-height: 4
+    highlight-style: github
+    self-contained: true  
+editor: visual
+---
+
+```{r setup}
+#| label: setup
+#| echo: false
+#| cache: true
+
+knitr::opts_chunk$set(echo = TRUE, fig.path='figures/', cache = TRUE, fig.width = 10)
+ggplot2::theme_set(ggplot2::theme_bw())
+```
+
+## Data preparation
+
+```{r libraries }
+#| label: libraries
+#| message: false
+#| cache: false
+#| include: false
+#| warning: false
+#| echo: false
+
+library(readr)
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(purrr)
+library(stringr)
+library(ggplot2)
+library(ggrepel)
+library(kfigr)
+library(knitr)
+library(DT)
+library(grateful)
+library(patchwork)
+library(broom)
+library(gt)
+library(tibble)
+library(corrr)
+library(forcats)
+library(shiny)
+library(grid)
+library(ggvenn)
+library(vegan)
+library(reshape2)
+library(ggsignif)
+library(readxl)
+library(ggcorrplot)
+library(FactoMineR)
+library(factoextra)
+library(missMDA)
+library(kableExtra) # For tables
+library(compositions) # For CLR transformation
+library(pheatmap)
+library(gridExtra)
+library(tidytext)  # per reorder_within() e scale_x_reordered()
+library(shadowtext)
+library(gt)
+library(reactable)
+library(clusterProfiler)
+library(pathview)
+library(ggtext)
+library(Hmisc)
+library(igraph)
+library(ggplotify)
+library("ComplexHeatmap")
+library(networkD3)
+```
+
+## Load datasets
+
+```{r read-data, cache.lazy=FALSE}
+#| label: read-data
+#| include: false
+#| warning: false
+#| echo: false
+
+# Load count table for
+# metaT
+mt <- read_tsv('./data/mt.tpm.tsv.gz', show_col_types = FALSE) %>%
+  rename(orf = 1) %>%
+  pivot_longer(
+    cols = -orf,
+    names_to = "sample",
+    values_to = "tpm_t"
+  ) %>%
+  mutate(sample = as.Date(sample))
+
+# metaG
+mg <- read_tsv('./data/mg.tpm.tsv.gz', show_col_types = FALSE) %>%
+  rename(orf = 1) %>%
+  pivot_longer(
+    cols = -orf,
+    names_to = "sample",
+    values_to = "tpm_g"
+  ) %>%
+  mutate(sample = as.Date(sample))
+
+# metaP
+mp <- read_tsv('./data/harmonized.wide.tsv', show_col_types = FALSE) %>%
+  rename(orf = 1) %>%
+  pivot_longer(
+    cols = -orf,
+    names_to = "sample",
+    values_to = "tpm_p"
+  ) %>%
+  mutate(sample = as.Date(sample))
+
+# eggnog-mapper
+annotation <- read_tsv('./data/orf_annotations.tsv.gz', show_col_types = FALSE)
+
+# GTDB taxonomy
+taxonomy <- read_tsv('./data/orf_taxonomy.tsv.gz', show_col_types = FALSE)
+
+# correlation mt vs mt all
+corr_mp_mt_all <- read_tsv('./data/correlation/correlation_results.mtvsmp.orfs.tsv', show_col_types = FALSE) %>%
+  left_join(taxonomy %>%
+              distinct(orf, .keep_all = TRUE), join_by(orf))
+# correlation mt vs mt only < 0.05
+corr_mp_mt <- read_tsv('./data/correlation/correlation_results.mtvsmp.orfs.tsv', show_col_types = FALSE) %>%
+  filter(p_adjust < 0.05) %>%
+  left_join(taxonomy %>%
+              distinct(orf, .keep_all = TRUE), join_by(orf))
+
+# Correlation results mtvsmp
+corr_mp_mt_fam <- read_tsv('./data/correlation/correlation_results.mtvsmp.families.tsv', show_col_types = FALSE)  %>%
+  filter(p_adjust < 0.05) %>%
+  left_join(taxonomy %>%
+              distinct(family, .keep_all = TRUE) %>%
+              select(-genome, -orf, -genus, -species), join_by(family))
+corr_mp_mt_mag <- read_tsv('./data/correlation/correlation_results.mtvsmp.MAGs.tsv', show_col_types = FALSE)  %>%
+  filter(p_adjust < 0.05) %>%
+  left_join(taxonomy %>%
+              distinct(genome, .keep_all = TRUE) %>%
+              select(-orf), join_by(genome))
+
+ko <- read_tsv('./data/harmonized.kofamscan.besthit.tsv.gz', show_col_types = FALSE) %>% filter(sign == '*') %>%
+  rename(
+    orf = 'accno'
+  )
+```
+
+## Combine datasets
+
+Datasets are combined using metaP as main filter
+
+```{r combine-datasets}
+# combine all omics data
+meta <- mp %>%
+  left_join(mg, join_by(orf,sample)) %>%
+  left_join(mt, join_by(orf,sample))
+
+# keep only omics data with valid samples
+valid_samples <- meta %>%
+  group_by(sample) %>%
+  summarise(
+    has_p = sum(tpm_p, na.rm = TRUE) > 0,
+    has_t = sum(tpm_t, na.rm = TRUE) > 0,
+    has_g = sum(tpm_g, na.rm = TRUE) > 0
+  ) %>%
+  filter(has_p & has_t & has_g)
+
+meta_match <- meta %>%
+  semi_join(valid_samples, by = "sample")
+
+# Add KO annotation to meta_match variable
+meta_match_ko <- meta_match %>%
+  left_join(ko, join_by(orf)) %>%
+  left_join(taxonomy, join_by(orf))
+```
+
+## Results
+
+The figure below shows that metaP covers max 2,8% of the metaG and max \~4% of the metaT.
+
+```{r relative-abundande-omics}
+
+avg_tpm <- meta_match %>%
+  group_by(sample) %>%
+  select(-tpm_p) %>%
+  summarise(
+    tpm_t = sum(tpm_t, na.rm = TRUE),
+    tpm_g = sum(tpm_g, na.rm = TRUE)
+  ) %>%
+  pivot_longer(cols = starts_with("tpm_"),
+               names_to = "omic",
+               values_to = "tpm") %>%
+  group_by(omic) %>%
+  summarise(
+    mean_tpm = mean(tpm),
+    sd_tpm = sd(tpm),
+    se_tpm = sd_tpm / sqrt(n())
+  )
+
+ggplot(avg_tpm, aes(x = omic, y = mean_tpm)) +
+  geom_point(size = 4) +
+  geom_errorbar(aes(ymin = mean_tpm - se_tpm,
+                    ymax = mean_tpm + se_tpm),
+                width = 0.2) +
+  theme_minimal() +
+  labs(x = "Omics layer", y = "Average TPM")
+```
+
+Let's try an iterative process of randomise same amount of ORFs to see if I get a different results.
+
+1.  select samples to test (10 with metaT,G,P)
+2.  iterative analysis for metat
+3.  iterative analysis for metag
+4.  plot the results
+
+```{r select-which-samples-to-include}
+mm_dt <- as.data.table(meta_match)
+ann_dt <- as.data.table(annotation)
+tax_dt <- as.data.table(taxonomy)
+
+setkey(mm_dt, orf)
+setkey(ann_dt, orf)
+setkey(tax_dt, orf)
+
+meta_match_ann <- ann_dt[tax_dt[mm_dt, on = "orf"], on = "orf"]
+
+# Filter to samples with all 3 tpm > 0
+valid <- meta_match_ann[, .(has_p = any(tpm_p > 0), 
+                             has_g = any(tpm_g > 0, na.rm = TRUE), 
+                             has_t = any(tpm_t > 0, na.rm = TRUE)), by = sample]
+keep_samples <- valid[has_p & has_g & has_t, sample]
+samples_all3 <- meta_match_ann[sample %in% keep_samples]
+
+matched_orfs <- unique(samples_all3$orf)
+n_matched <- length(matched_orfs)
+cat("Matched ORFs:", n_matched, "| Samples:", length(keep_samples), "\n")
+```
+
+```{r iterate-for-metat}
+# Set same seed
+set.seed(7413)
+
+# Set number of iteration
+n_iter <- 1000
+
+# Set samples to keep
+samples_keep <- keep_samples
+
+# create a sub-dataset with only those 10 samples
+mt_10 <- mt %>%
+  filter(sample %in% samples_keep)
+
+# subset orfs from 10 saples
+mt_orfs_10 <- mt_10 %>% distinct(orf) %>% pull(orf)
+
+# Bootstrap
+boot_results <- map_dfr(1:n_iter, function(i) {
+  rand_orfs <- sample(mt_orfs_10, n_matched)
+  
+  mt_10 |>
+    filter(orf %in% rand_orfs) |>
+    group_by(sample) |>
+    summarise(random_tpm = sum(tpm_t, na.rm = TRUE), .groups = "drop") |>
+    left_join(total_by_sample, by = "sample") |>
+    mutate(pct_random = random_tpm / total_tpm * 100,
+           iteration = i)
+})
+
+# Intervalli di confidenza per campione
+boot_summary <- boot_results |>
+  group_by(sample) |>
+  summarise(
+    mean_random = mean(pct_random),
+    ci_low  = quantile(pct_random, 0.025),
+    ci_high = quantile(pct_random, 0.975)
+  )
+
+# Confronto finale
+# coverage |>
+#   select(sample, pct_matched) |>
+#   left_join(boot_summary, by = "sample")
+```
+
+```{r iterate-for-metag}
+
+# Subset orf from 10 samples
+mg_orfs_10 <- mg_10 %>% distinct(orf) %>% pull(orf)
+
+boot_results_g <- map_dfr(1:n_iter, function(i) {
+  rand_orfs <- sample(mg_orfs_10, n_matched)
+  
+  mg_10 |>
+    filter(orf %in% rand_orfs) |>
+    group_by(sample) |>
+    summarise(random_tpm = sum(tpm_g, na.rm = TRUE), .groups = "drop") |>
+    left_join(total_g, by = "sample") |>
+    mutate(pct_random = random_tpm / total_tpm * 100,
+           iteration = i)
+})
+
+boot_summary_g <- boot_results_g |>
+  group_by(sample) |>
+  summarise(
+    mean_random = mean(pct_random),
+    ci_low  = quantile(pct_random, 0.025),
+    ci_high = quantile(pct_random, 0.975)
+  )
+
+# coverage_g |>
+#   select(sample, pct_matched) |>
+#   left_join(boot_summary_g, by = "sample")
+
+
+```
+
+```{r plot-results}
+coverage_combined <- bind_rows(
+  # metaG: bootstrap results
+  boot_results_g |>
+    mutate(layer = "Metagenomics", subset = "Random ORFs (same n)") |>
+    rename(pct_coverage = pct_random) |>
+    select(sample, layer, subset, pct_coverage),
+  # metaT: bootstrap results  
+  boot_results |>
+    mutate(layer = "Metatranscriptomics", subset = "Random ORFs (same n)") |>
+    rename(pct_coverage = pct_random) |>
+    select(sample, layer, subset, pct_coverage),
+  # metaG: matched ORFs (single value per sample)
+  coverage_g |>
+    mutate(layer = "Metagenomics", subset = "Metaproteomics ORFs") |>
+    rename(pct_coverage = pct_matched) |>
+    select(sample, layer, subset, pct_coverage),
+  # metaT: matched ORFs (single value per sample)
+  coverage |>
+    mutate(layer = "Metatranscriptomics", subset = "Metaproteomics ORFs") |>
+    rename(pct_coverage = pct_matched) |>
+    select(sample, layer, subset, pct_coverage)
+)
+
+ggplot(coverage_combined, aes(x = layer, y = pct_coverage, fill = subset)) +
+  geom_boxplot(width = 0.5, outlier.shape = NA) +
+  scale_y_log10() +
+  labs(x = NULL,
+       y = "% of total abundance captured (log scale)",
+       fill = NULL,
+       title = "Coverage: metaproteomics ORFs vs. random ORFs of equal size",
+       subtitle = paste0("Random: n=1000 bootstrap iterations; matched: n=", n_matched, " ORFs, 10 samples")) +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+**Observations — MetaP coverage bootstrap analysis**
+
+The metaproteomics-matched ORFs (n=4,724) capture approximately 3–5% of total abundance in both metagenomics (RPKM) and metatranscriptomics (TPM) across the 10 samples with complete multi-omic coverage. In contrast, random sets of equal size drawn from the full ORF pool of the same 10 samples capture only \~0.2–0.3% of total abundance (bootstrap n=1,000 iterations). This represents a \~10–15x enrichment of metaP-detected ORFs relative to a random expectation.
+
+This result indicates that metaproteomics detection is strongly biased toward high-abundance genes — those that are also highly represented at both the genomic and transcriptomic level. This is consistent with the known detection limitations of mass spectrometry-based proteomics, which preferentially identifies abundant proteins due to ion suppression effects and dynamic range constraints in complex environmental samples.
+
+Two non-mutually exclusive explanations are possible:
+
+1.  **Functional bias** — metaP preferentially detects constitutively expressed, high-turnover proteins such as ribosomal proteins, chaperones, and housekeeping functions, which are inherently abundant regardless of environmental conditions
+
+2.  **Taxonomic bias** — metaP preferentially detects proteins from the most abundant taxa, which are by definition also dominant in metaG and metaT
+
+Distinguishing between these two hypotheses requires examination of the functional annotations of the top correlated ORFs (Step 5), which will clarify whether the detected proteome is enriched for specific functional categories or reflects a broad taxonomic cross-section of the dominant community members.
+
+```{r concordance-phylum-family-correlation}
+# Tabella: famiglie significative per phylum
+family_table <- corr_mp_mt_fam |>
+  filter(p_adjust < 0.05) |>
+  group_by(superkingdom, phylum) |>
+  summarise(
+    n_families = n(),
+    mean_corr = round(mean(corr), 3),
+    median_corr = round(median(corr), 3),
+    .groups = "drop"
+  ) |>
+  arrange(desc(n_families))
+
+background <- meta_match_ann %>%
+  distinct(family, .keep_all = TRUE) %>%
+  group_by(phylum) |>
+  summarise(
+    n_total = n()) %>%
+  arrange(desc(n_total))
+
+# Join con famiglie significative
+overrep_table.1 <- background |>
+  left_join(family_table |> select(phylum, n_families, mean_corr, median_corr), 
+            by = "phylum") |>
+  mutate(
+    n_families = replace_na(n_families, 0),
+    pct_significant = round(n_families / n_total * 100, 1)
+  ) |>
+  arrange(desc(pct_significant))
+
+kable(overrep_table.1)
+```
+
+**Observations — Family-level cross-omic concordance (metaT vs metaP)**
+
+63 families show significant metaT/metaP concordance (Spearman, p_adjust \< 0.05), distributed across 11 bacterial phyla. Pseudomonadota contributes the most families in absolute terms (28/53, 53%), but Bacteroidota shows the highest proportion of significant families relative to its diversity in the metaP subset (10/16, 63%). Mean correlations are consistently high across phyla (range 0.635–0.804), with Actinomycetota showing the highest mean (0.804). No phylum is statistically overrepresented after FDR correction.
+
+```{r concordance-family-genome-correlation}
+genome_table <- corr_mp_mt_mag |>
+  filter(p_adjust < 0.05) |>
+  group_by(family, phylum) |>
+  summarise(
+    n_genomes = n(),
+    mean_corr = round(mean(corr), 3),
+    median_corr = round(median(corr), 3),
+    .groups = "drop"
+  ) |>
+  arrange(desc(n_genomes))
+
+background.2 <- meta_match_ann %>%
+  distinct(genome, .keep_all = TRUE) %>%
+  group_by(family) |>
+  summarise(
+    n_total = n()) %>%
+  arrange(desc(n_total))
+
+# Join con famiglie significative
+overrep_table.2 <- background.2 |>
+  left_join(genome_table |> select(phylum, family, n_genomes, mean_corr, median_corr), 
+            by = "family") |>
+  mutate(
+    n_genomes = replace_na(n_genomes, 0),
+    pct_significant = round(n_genomes / n_total * 100, 1)
+  ) |>
+  arrange(desc(pct_significant))
+
+kable(overrep_table.2)
+```
+
+**Observations — Genome-level cross-omic concordance (metaT vs metaP)**
+
+Focusing on families with three or more genomes, Ilumatobacteraceae (11/15, 73%), Nanopelagicaceae (14/20, 70%), and Crocinitomicaceae (7/10, 70%) show the highest proportion of concordant genomes. Rhodobacteraceae (8/17, 47%) and Pelagibacteraceae (3/7, 43%) show relatively low concordance despite being among the most abundant marine bacterial families. Several families show no concordant genomes, including Nitrosopumilaceae (0/2) and multiple unclassified groups. Genome-level concordance is heterogeneous even within families, indicating that family-level patterns mask genome-specific variation
+
+```{r concordance-metat-metap}
+# Prepare dataset
+family_flow <- overrep_table.2 |>
+  filter(n_total >= 3, n_genomes >= 1) |>
+  filter(n_genomes > 0, !is.na(family), !str_detect(family, "Unclassified")) |>
+  select(family, phylum, n_genomes) |>
+  arrange(desc(n_genomes))
+
+
+# Links phylum -> family
+links_all <- family_flow |>
+  rename(source = phylum, target = family, value = n_genomes)
+
+# Nodi unici
+nodes <- data.frame(
+  name = unique(c(links_all$source, links_all$target))
+)
+
+# Indici 0-based
+links_all <- links_all |>
+  mutate(
+    source = match(source, nodes$name) - 1,
+    target = match(target, nodes$name) - 1
+  )
+
+# Colori
+nodes <- nodes |>
+  mutate(color = case_when(
+    name == "Pseudomonadota"    ~ "#5DCAA5",
+    name == "Actinomycetota"    ~ "#7F77DD",
+    name == "Bacteroidota"      ~ "#F0997B",
+    name == "Cyanobacteriota"   ~ "#378ADD",
+    name == "Planctomycetota"   ~ "#EF9F27",
+    name == "Verrucomicrobiota" ~ "#D4537E",
+    TRUE ~ "#B4B2A9"
+  ))
+
+color_scale <- paste0(
+  'd3.scaleOrdinal().domain([',
+  paste0('"', nodes$name, '"', collapse = ","),
+  ']).range([',
+  paste0('"', nodes$color, '"', collapse = ","),
+  '])'
+)
+
+htmlwidgets::prependContent(
+  sankeyNetwork(
+    Links = as.data.frame(links_all),
+    Nodes = nodes,
+    Source = "source",
+    Target = "target",
+    Value = "value",
+    NodeID = "name",
+    colourScale = color_scale,
+    fontSize = 11,
+    nodeWidth = 20,
+    nodePadding = 8,
+    sinksRight = TRUE,
+    width = 900,
+    height = 500
+  ),
+  htmltools::tags$h3(
+    "Concordant genomes per family by phylum",
+    style = "font-family: sans-serif; font-size: 14px; color: #444; margin: 8px 0 4px 0;"
+  )
+)
+```
+
+```{r concordance-genome-orf-correlation}
+orf_table <- corr_mp_mt |>
+  filter(p_adjust < 0.05) |>
+  group_by(genome) |>
+  summarise(
+    n_orf = n(),
+    mean_corr = round(mean(corr), 3),
+    median_corr = round(median(corr), 3),
+    .groups = "drop"
+  ) |>
+  arrange(desc(n_orf))
+
+background.3 <- meta_match_ann %>%
+  distinct(orf, .keep_all = TRUE) %>%
+  group_by(genome) |>
+  summarise(
+    n_total = n()) %>%
+  arrange(desc(n_total))
+
+# Join con famiglie significative
+overrep_table <- background.3 |>
+  left_join(orf_table |> select(genome, n_orf, mean_corr, median_corr), 
+            by = "genome") |>
+  mutate(
+    n_orf = replace_na(n_orf, 0),
+    pct_significant = round(n_orf / n_total * 100, 1)
+  ) |>
+  arrange(desc(pct_significant)) %>%
+  left_join(taxonomy %>%
+              select(genome, family, phylum) %>%
+              distinct(genome, .keep_all = TRUE), join_by(genome)) %>%
+  arrange(desc(n_orf))
+
+genome_family_summary <- overrep_table |>
+  filter(!is.na(family), !str_detect(family, "Unclassified")) |>
+  group_by(family) |>
+  summarise(
+    n_orf_total = sum(n_total),
+    n_orf_sig = sum(n_orf > 0, na.rm = TRUE),
+    pct_sig = round(n_orf_sig / n_orf_total * 100, 1),
+    mean_corr = round(mean(mean_corr, na.rm = TRUE), 3)
+  ) |>
+  filter(n_orf_total >= 3) |>
+  arrange(desc(pct_sig))
+
+kable(genome_family_summary)
+
+
+```
+
+**Observations — Abundance of concordant vs non-concordant genomes in metaT**
+
+At genome level, genomes with significant metaT/metaP correlation show higher metaT TPM than non-concordant genomes (Wilcoxon, effect size r=0.284, n=225 vs 185). The difference is modest but substantially larger than at ORF level (r=0.052), suggesting that cross-omic concordance is partially driven by overall genome transcriptional activity rather than by properties of individual ORFs.
+
+Graphical reppresnetation of Sankey flow
+
+```{r sankey-plot-orf-level}
+# Prepare dataset
+genome_flow <- overrep_table |>
+  left_join(taxonomy %>%
+              distinct(genome, .keep_all = TRUE) %>%
+              select(genome, class, order), join_by(genome)) %>%
+  filter(n_orf > 5) |>
+  filter(!is.na(family), !str_detect(family, "Unclassified")) |>
+  select(genome, family, phylum, n_orf) |>
+  arrange(desc(n_orf))
+
+
+library(networkD3)
+
+# Prepara i dati - assicurati di avere genome_flow con colonne: genome, family, phylum, n_orf
+# Costruisci i link phylum -> family -> genome
+links_pf <- genome_flow |>
+  group_by(phylum, family) |>
+  summarise(value = sum(n_orf), .groups = "drop") |>
+  rename(source = phylum, target = family)
+
+links_fg <- genome_flow |>
+  select(family, genome, n_orf) |>
+  rename(source = family, target = genome, value = n_orf)
+
+links_all <- bind_rows(links_pf, links_fg)
+
+# Costruisci nodi unici
+nodes <- data.frame(
+  name = unique(c(links_all$source, links_all$target))
+)
+
+# Converti source/target in indici numerici (0-based)
+links_all <- links_all |>
+  mutate(
+    source = match(source, nodes$name) - 1,
+    target = match(target, nodes$name) - 1
+  )
+
+# Aggiungi colore come colonna nel dataframe nodes
+nodes <- nodes |>
+  mutate(color = case_when(
+    name == "Pseudomonadota"    ~ "#5DCAA5",
+    name == "Actinomycetota"    ~ "#7F77DD",
+    name == "Bacteroidota"      ~ "#F0997B",
+    name == "Cyanobacteriota"   ~ "#378ADD",
+    name == "Planctomycetota"   ~ "#EF9F27",
+    name == "Verrucomicrobiota" ~ "#D4537E",
+    TRUE ~ "#B4B2A9"
+  ))
+
+# Costruisci stringa colori per JS
+color_scale <- paste0(
+  'd3.scaleOrdinal().domain([',
+  paste0('"', nodes$name, '"', collapse = ","),
+  ']).range([',
+  paste0('"', nodes$color, '"', collapse = ","),
+  '])'
+)
+
+p <- sankeyNetwork(
+  Links = as.data.frame(links_all),
+  Nodes = nodes,
+  Source = "source",
+  Target = "target",
+  Value = "value",
+  NodeID = "name",
+  colourScale = color_scale,
+  fontSize = 11,
+  nodeWidth = 20,
+  nodePadding = 8,
+  sinksRight = TRUE,
+  width = 900,
+  height = 600
+)
+
+library(htmltools)
+
+
+# Aggiungi titolo
+htmlwidgets::prependContent(
+  p,
+  htmltools::tags$h3(
+    "Significant ORF concordance: phylum → family → genome",
+    style = "font-family: sans-serif; font-size: 14px; 
+             color: #444; margin: 8px 0 4px 0;"
+  )
+)
+```
+
+```{r sankey-plot-orf-level-proportion }
+# Aggiungi class e order, calcola proporzione
+genome_f <- overrep_table |>
+  left_join(
+    taxonomy %>%
+      distinct(genome, .keep_all = TRUE) %>%
+      select(genome, class, order),
+    join_by(genome)
+  ) |>
+  filter(!is.na(class), !str_detect(class, "Unclassified"),
+         !is.na(order), !str_detect(order, "Unclassified")) |>
+  # calcola proporzione correlated / metaP_matched per genome
+  left_join(
+    meta_match_ko |>
+      group_by(genome) |>
+      summarise(n_metap = n_distinct(orf), .groups = "drop"),
+    by = "genome"
+  ) |>
+  mutate(prop = n_orf / n_metap) |>
+  select(genome, class, family, n_orf, n_metap, prop) |>
+  arrange(desc(prop))
+genome_flow <- genome_f %>%
+  filter(n_orf > 5)
+# Links class -> order -> genome usando proporzione
+links_co <- genome_flow |>
+  group_by(class, family) |>
+  summarise(value = mean(prop), .groups = "drop") |>
+  rename(source = class, target = family)
+
+links_og <- genome_flow |>
+  select(family, genome, prop) |>
+  rename(source = family, target = genome, value = prop)
+
+links_all <- bind_rows(links_co, links_og)
+
+# Nodi unici
+nodes <- data.frame(
+  name = unique(c(links_all$source, links_all$target))
+)
+
+# Colori per class
+nodes <- nodes |>
+  mutate(color = case_when(
+    name %in% unique(genome_flow$class) ~ case_when(
+      name == "Gammaproteobacteria" ~ "#5DCAA5",
+      name == "Alphaproteobacteria" ~ "#3A8A6E",
+      name == "Actinomycetia"       ~ "#7F77DD",
+      name == "Bacteroidia"         ~ "#F0997B",
+      name == "Cyanobacteriia"      ~ "#378ADD",
+      name == "Planctomycetia"      ~ "#EF9F27",
+      name == "Verrucomicrobiae"    ~ "#D4537E",
+      TRUE ~ "#B4B2A9"
+    ),
+    TRUE ~ "#D3D1C7"
+  ))
+
+color_scale <- paste0(
+  'd3.scaleOrdinal().domain([',
+  paste0('"', nodes$name, '"', collapse = ","),
+  ']).range([',
+  paste0('"', nodes$color, '"', collapse = ","),
+  '])'
+)
+
+# Converti in indici 0-based
+links_all <- links_all |>
+  mutate(
+    source = match(source, nodes$name) - 1,
+    target = match(target, nodes$name) - 1
+  )
+
+p <- sankeyNetwork(
+  Links = as.data.frame(links_all),
+  Nodes = nodes,
+  Source = "source",
+  Target = "target",
+  Value = "value",
+  NodeID = "name",
+  colourScale = color_scale,
+  fontSize = 11,
+  nodeWidth = 20,
+  nodePadding = 8,
+  sinksRight = TRUE,
+  width = 900,
+  height = 600
+)
+
+htmlwidgets::prependContent(
+  p,
+  htmltools::tags$h3(
+    "Proportion of correlated ORFs: class \u2192 order \u2192 genome",
+    style = "font-family: sans-serif; font-size: 14px;
+             color: #444; margin: 8px 0 4px 0;"
+  )
+)
+```
+
+```{r table-from-sankey-plot}
+genome_table <- genome_f |>
+  # media TPM in metaT per genoma
+  left_join(
+    mt_10 |>
+      left_join(taxonomy, join_by(orf)) |>
+      filter(!is.na(genome)) |>
+      group_by(genome, sample) |>
+      summarise(sum_tpm = sum(tpm_t), .groups = 'drop') %>%
+      group_by(genome) %>%
+      summarise(average_metaT_MAG = mean(sum_tpm, na.rm = TRUE),
+                .groups = "drop"),
+    by = "genome"
+  ) |>
+  select(
+    genome,
+    total_n_orf    = n_metap,
+    n_correlated   = n_orf,
+    proportion     = prop,
+    average_metaT_MAG
+  ) |>
+  arrange(desc(proportion))
+
+genome_table_plot <- genome_table |>
+  filter(!is.na(average_metaT_MAG)) |>
+  arrange(desc(average_metaT_MAG)) |>
+  mutate(
+    rank = row_number(),
+    proportion = n_correlated / total_n_orf,
+    has_corr = n_correlated > 0
+  )
+
+ggplot(genome_table_plot, aes(x = rank, y = average_metaT_MAG)) +
+  # linea di ranking abbondanza
+  geom_line(color = "#D3D1C7", linewidth = 0.6) +
+  # tutti i genomi — dimensione = total_n_orf
+  geom_point(aes(size = total_n_orf),
+             color = "#D3D1C7", alpha = 0.5) +
+  # genomi con correlazioni — colore = proporzione
+  geom_point(data = genome_table_plot |> filter(has_corr),
+             aes(size = total_n_orf, color = proportion),
+             alpha = 0.9) +
+  scale_color_gradient(low = "#9FE1CB", high = "#085041",
+                       name = "Proportion\ncorrelated",
+                       labels = scales::percent) +
+  scale_size_continuous(range = c(1, 8), name = "Total ORFs\nin metaP") +
+  scale_y_log10(labels = scales::comma) +
+  labs(
+    x = "Genome rank (by mean metaT TPM)",
+    y = "Mean metaT TPM (log scale)",
+    title = "Genomes ranked by transcriptional abundance",
+    subtitle = "Color = proportion of correlated ORFs | Size = total ORFs in metaP | Grey = no significant correlation"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "right",
+    panel.grid.minor = element_blank()
+  )
+```
+
+### Is correlation related to number of ORFs within family? NO
+
+```{r is-correlation-related-to-number-orf}
+#| warning: false
+# extract family-level summary
+family_summary <- meta_match_ko |>
+  group_by(orf, family) |>
+  summarise(
+    corr = first(corr),
+    is_sig = first(p_adjust) < 0.05,
+    .groups = "drop"
+  ) |>
+  group_by(family) |>
+  filter(n() >= 20) |>
+  summarise(
+    n_total = n(),
+    n_sig = sum(is_sig),
+    prop_sig = n_sig / n_total,
+    .groups = "drop"
+  )
+
+# test correlation
+cor.test(family_summary$n_total, family_summary$prop_sig, 
+         method = "spearman")
+
+# visualize
+ggplot(family_summary, aes(x = n_total, y = prop_sig, label = family)) +
+  geom_point(alpha = 0.7, size = 2, color = "#1D9E75") +
+  geom_smooth(method = "lm", se = TRUE, color = "grey50", linewidth = 0.8, formula = 'y~x') +
+  geom_text(size = 2.5, hjust = -0.1, vjust = 0.5, check_overlap = TRUE) +
+  scale_x_log10() +
+  labs(x = "Total ORFs in metaP (log scale)",
+       y = "Proportion of concordant ORFs",
+       title = "Is correlation proportion related to number of ORFs?") +
+  theme_minimal(base_size = 11)
+```
+
+## Enrichment analysis
+
+```{r ko-analysis}
+
+corr_mp_mt_ko <- corr_mp_mt %>%
+  left_join(ko, join_by(orf)) %>%
+  filter(p_adjust < 0.05)
+
+# Scarica mapping KO -> pathway
+download.file(
+  "https://rest.kegg.jp/link/pathway/ko",
+  "ko_pathway.txt"
+)
+
+# Save KEGG pathways
+ko_pathway <- read_tsv("ko_pathway.txt", 
+                        col_names = c("ko", "pathway")) |>
+  mutate(
+    ko = str_remove(ko, "ko:"),
+    pathway = str_remove(pathway, "path:")
+  ) |>
+  filter(str_starts(pathway, "map"))
+
+
+# Pathway rappresentati nei KO correlanti
+ko_pathway_summary <- corr_mp_mt_ko |>
+  filter(!is.na(ko), p_adjust < 0.05) |>
+  left_join(ko_pathway, by = "ko") |>
+  filter(!is.na(pathway)) |>
+  left_join(pathway_names, by = "pathway") |>
+  group_by(pathway, name) |>
+  summarise(
+    n_ko = n_distinct(ko),
+    n_orf = n_distinct(orf),
+    .groups = "drop"
+  ) |>
+  arrange(desc(n_ko))
+
+
+ko_pathway_plot <- ko_pathway_summary |>
+  filter(!pathway %in% c("map01100", "map01110", "map01120", "map01200", "map01230")) |>
+  head(20) |>
+  mutate(name = fct_reorder(name, n_ko))
+
+ggplot(ko_pathway_plot, aes(x = n_ko, y = name)) +
+  geom_col(fill = "#1D9E75", width = 0.7) +
+  geom_text(aes(label = n_orf), hjust = -0.3, size = 3.5) +
+  labs(
+    x = "Number of correlated KOs",
+    y = NULL,
+    title = "KEGG pathways represented among correlated ORFs",
+    subtitle = "metaT vs metaP significant correlations (p_adjust < 0.05)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(panel.grid.major.y = element_blank()) +
+  expand_limits(x = max(ko_pathway_plot$n_ko) * 1.1)
+```
+
+```{r ko-analysis-with-proportion}
+# Tutti i KO nel subset metaP-matched (significativi e non)
+ko_pathway_all <- meta_match_ko |>
+  filter(!is.na(ko)) |>
+  filter(!is.na(pathway)) |>
+  filter(!pathway %in% c("map01100", "map01110", "map01120", "map01200", "map01230")) |>
+  group_by(pathway, name) |>
+  summarise(
+    n_ko_total = n_distinct(ko),
+    n_orf_total = n_distinct(orf),
+    .groups = "drop"
+  )
+
+# Join con i correlanti e calcola proporzione
+ko_pathway_prop_orf <- ko_pathway_summary |>
+  filter(!pathway %in% c("map01100", "map01110", "map01120", "map01200", "map01230")) |>
+  left_join(ko_pathway_all, by = c("pathway", "name")) |>
+  mutate(
+    n_orf_not_corr = n_orf_total - n_orf
+  ) |>
+  filter(n_orf_total >= 5) |>
+  arrange(desc(n_orf)) |>
+  head(20) |>
+  mutate(name = fct_reorder(name, n_orf)) |>
+  pivot_longer(cols = c(n_orf, n_orf_not_corr),
+               names_to = "group",
+               values_to = "n") |>
+  mutate(group = recode(group,
+    n_orf = "Correlated",
+    n_orf_not_corr = "Not correlated"
+  )) %>%
+  filter(!is.na(name))
+
+ko_pathway_prop_final <- ko_pathway_summary |>
+  filter(!is.na(name)) %>%
+  filter(!pathway %in% c("map01100", "map01110", "map01120", "map01200", "map01230")) |>
+  left_join(ko_pathway_all, by = c("pathway", "name")) |>
+  mutate(prop_corr = n_orf / n_orf_total) |>
+  filter(n_orf_total >= 5) |>
+  arrange(desc(n_orf)) |>
+  head(20) |>
+  mutate(name = fct_reorder(name, prop_corr))
+
+ggplot(ko_pathway_prop_final, aes(x = prop_corr, y = name, size = n_orf_total)) +
+  geom_point(color = "#1D9E75", alpha = 0.8) +
+  geom_vline(xintercept = 0.5, linetype = "dashed", color = "grey50") +
+  scale_x_continuous(labels = scales::percent) +
+  scale_size_continuous(range = c(2, 10)) +
+  labs(x = "Proportion of correlated ORFs",
+       y = NULL,
+       size = "Total ORFs",
+       title = "Proportion of concordant ORFs by KEGG pathway",
+       subtitle = "Among metaP-matched ORFs (pathways with n \u2265 5)") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "right")
+```
+
+**Observations — KEGG pathways among correlated ORFs**
+
+Correlated KOs (n=160) span three main functional categories:
+
+- **Translation/cellular structure:** Ribosome (31 KOs, 78 ORFs), Aminoacyl-tRNA biosynthesis — consistent with bias toward stable, abundant proteins.
+
+- **Transport/signaling:** ABC transporters (16 KOs, 33 ORFs), Quorum sensing (26 ORFs), Two-component system (30 ORFs) — environmentally responsive functions.
+
+- **Energy metabolism:** Photosynthesis, Carbon fixation, Oxidative phosphorylation — consistent with Cyanobacteriota dominance at ORF level.
+
+RNA degradation (38 ORFs) is unexpected and warrants further investigation.
+
+## There are taxa with major concentration of specific functions?
+
+```{r family-level}
+ko_tax_summary <- corr_mp_mt_ko |>
+  filter(!is.na(ko), p_adjust < 0.05) |>
+  left_join(ko_pathway, by = "ko") |>
+  filter(!is.na(pathway)) |>
+  left_join(pathway_names, by = "pathway") |>
+  filter(!pathway %in% c("map01100", "map01110", "map01120", 
+                          "map01200", "map01230")) |>
+  group_by(name, family) |>
+  summarise(
+    n_orf = n_distinct(orf),
+    n_ko = n_distinct(ko),
+    .groups = "drop"
+  ) |>
+  arrange(desc(n_orf))
+
+# Prepara matrice per heatmap
+heatmap_data <- corr_mp_mt_ko |>
+  filter(!is.na(ko), p_adjust < 0.05) |>
+  left_join(ko_pathway, by = "ko") |>
+  filter(!is.na(pathway)) |>
+  left_join(pathway_names, by = "pathway") |>
+  filter(!pathway %in% c("map01100", "map01110", "map01120",
+                          "map01200", "map01230"),
+         !is.na(family),
+         !str_detect(family, "Unclassified")) |>
+  group_by(name, family) |>
+  summarise(n_orf = n_distinct(orf), .groups = "drop") |>
+  # Filtra famiglie e pathway con almeno 3 ORF per pulizia
+  group_by(family) |> filter(sum(n_orf) >= 8) |> ungroup() |>
+  group_by(name) |> filter(sum(n_orf) >= 8) |> ungroup() |>
+  filter(!is.na(name))
+
+ggplot(heatmap_data, aes(x = family, y = name, fill = n_orf)) +
+  geom_tile(color = "white", linewidth = 0.3) +
+  scale_fill_gradient(low = "#E1F5EE", high = "#085041",
+                      name = "n ORFs") +
+  labs(
+    x = NULL, y = NULL,
+    title = "Correlated ORFs by KEGG pathway and family",
+    subtitle = "metaT vs metaP significant correlations (p_adjust < 0.05)"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid = element_blank()
+  )
+```
+
+------------------------------------------------------------------------
+
+**Observations — Correlated ORFs by KEGG pathway and family**
+
+Cross-omic concordance is concentrated in a few families with distinct functional signatures:
+
+- **Rhodobacteraceae** — broadest signal across pathways: Ribosome, RNA degradation, Two-component system, TCA cycle, Glycolysis. Generalist heterotrophic metabolism.
+
+- **Cyanobiaceae** — signal concentrated in Photosynthesis and antenna proteins. Taxon-specific phototrophic signature.
+
+- **Burkholderiaceae** — Quorum sensing and ABC transporters dominant. Environmental signaling and nutrient acquisition.
+
+- **Nanopelagicaceae / Pelagibacteraceae** — weak, distributed signal across multiple pathways. Consistent with streamlined genomes.
+
+- **UBA1268** — Ribosome and RNA degradation. Poorly characterized but consistent signal.
+
+Overall: functional concordance between metaT and metaP is not randomly distributed but is taxon-specific, with each dominant family contributing a distinct functional signature.
+
+```{r genome-level }
+# Filtra alle famiglie dominanti e aggrega per genoma
+heatmap_genome <- corr_mp_mt_ko |>
+  filter(!is.na(ko), p_adjust < 0.05) |>
+  filter(family %in% c("Rhodobacteraceae", "Cyanobiaceae", 
+                        "Burkholderiaceae", "Nanopelagicaceae", 
+                        "Pelagibacteraceae")) |>
+  left_join(ko_pathway, by = "ko") |>
+  filter(!is.na(pathway)) |>
+  left_join(pathway_names, by = "pathway") |>
+  filter(!pathway %in% c("map01100", "map01110", "map01120",
+                          "map01200", "map01230"),
+         !is.na(name)) |>
+  group_by(name, genome, family) |>
+  summarise(n_orf = n_distinct(orf), .groups = "drop") |>
+  group_by(genome) |> filter(sum(n_orf) >= 5) |> ungroup() |>
+  group_by(name) |> filter(sum(n_orf) >= 5) |> ungroup() |> 
+  left_join(
+    corr_mp_mt_ko |> distinct(genome, genus),
+    by = "genome"
+  ) |>
+  mutate(
+    genome_label = paste0(genome, "\n(", genus, ")")
+  )
+
+# Plot con facet per famiglia
+ggplot(heatmap_genome, aes(x = genome_label, y = name, fill = n_orf)) +
+  geom_tile(color = "white", linewidth = 0.3) +
+  scale_fill_gradient(low = "#E1F5EE", high = "#085041",
+                      name = "n ORFs") +
+  facet_grid(~ family, scales = "free_x", space = "free_x") +
+  labs(
+    x = NULL, y = NULL,
+    title = "Correlated ORFs by KEGG pathway and genome",
+    subtitle = "Top 5 families — metaT vs metaP (p_adjust < 0.05)"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+    panel.grid = element_blank(),
+    strip.text = element_text(size = 9, face = "bold")
+  )
+```
+
+```{r}
+# totale ORF metaP-matched per genome × pathway
+total_genome_pathway <- meta_match_ko |>
+  filter(!is.na(ko)) |>
+  filter(!pathway %in% c("map01100", "map01110", "map01120",
+                          "map01200", "map01230"),
+         !is.na(name)) |>
+  group_by(name, genome) |>
+  summarise(n_total = n_distinct(orf), .groups = "drop")
+
+# join con heatmap_genome e calcola proporzione
+heatmap_genome_prop <- heatmap_genome |>
+  left_join(total_genome_pathway, by = c("name", "genome")) |>
+  mutate(prop_corr = n_orf / n_total)
+
+# Plot
+ggplot(heatmap_genome_prop, aes(x = genome_label, y = name, 
+                                 size = n_orf, color = prop_corr)) +
+  geom_point() +
+  scale_size_continuous(range = c(1, 8), name = "n ORFs") +
+  scale_color_gradient(low = "#E1F5EE", high = "#085041",
+                       name = "Proportion\ncorrelated",
+                       labels = scales::percent) +
+  facet_grid(~ family, scales = "free_x", space = "free_x") +
+  labs(x = NULL, y = NULL,
+       title = "Concordant ORFs by KEGG pathway and genome",
+       subtitle = "Top 5 families — metaT vs metaP (p_adjust < 0.05)") +
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+    panel.grid = element_line(color = "#F0EEE8"),
+    strip.text = element_text(size = 9, face = "bold")
+  )
+```
+
+**Observations — Correlated ORFs by KEGG pathway and genome**
+
+Within each family, cross-omic concordance is driven by one or few dominant genomes rather than the family as a whole:
+
+- **Rhodobacteraceae:** UBA10365 (LMO190122_SemiBin_52) drives most of the signal across Ribosome, TCA cycle, Glycolysis and central metabolism. Other genomes (Rosecyclus, UBA5972) show minimal concordance.
+
+- **Cyanobiaceae:** MW101C3 (LMO130801_bin.108) dominates Photosynthesis and Oxidative phosphorylation. Cyanobium_A and Vulcanococcus show distinct, weaker profiles — intra-family functional diversity.
+
+- **Burkholderiaceae:** Algicoccus drives Quorum sensing signal — suggestive of algae-bacteria interactions. RS62 and UBA2463 show different functional profiles.
+
+- **Nanopelagicaceae:** signal distributed across three genera (Planktophila, Nanopelagicus, MAG-120802) with no dominant genome.
+
+- **Pelagibacteraceae:** weak and sparse signal despite high abundance in the community.
+
+## Are these genome relevant in metaT?
+
+### Using only the subset of ORFs
+
+```{r 16-genomes-distribution-subset}
+# Abbondanza media TPM in metaT per i 16 genomi del plot
+target_genomes <- unique(heatmap_genome$genome)
+
+genome_tpm <- samples_all3 |>
+  filter(genome %in% target_genomes) |>
+  group_by(genome, family, genus) |>
+  summarise(
+    mean_tpm = mean(tpm_t, na.rm = TRUE),
+    median_tpm = median(tpm_t, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(desc(mean_tpm))
+
+# Aggiungi n_orf_sig per genoma
+genome_orf_sig <- corr_mp_mt_ko |>
+  filter(!is.na(ko), p_adjust < 0.05, genome %in% target_genomes) |>
+  group_by(genome) |>
+  summarise(n_orf_sig = n_distinct(orf), .groups = "drop")
+
+# Join con TPM
+genome_plot <- genome_tpm |>
+  left_join(genome_orf_sig, by = "genome") |>
+  mutate(genome_label = paste0(genus, "\n(", family, ")"))
+
+ggplot(genome_plot, aes(x = mean_tpm, y = n_orf_sig, 
+                         color = family, label = genus)) +
+  geom_point(size = 3) +
+  ggrepel::geom_text_repel(size = 3, max.overlaps = 20) +
+  scale_color_manual(values = c(
+    "Rhodobacteraceae"  = "#5DCAA5",
+    "Cyanobiaceae"      = "#378ADD",
+    "Burkholderiaceae"  = "#7F77DD",
+    "Nanopelagicaceae"  = "#EF9F27",
+    "Pelagibacteraceae" = "#F0997B"
+  )) +
+  labs(
+    x = "Mean TPM (metaT)",
+    y = "Number of correlated ORFs",
+    color = "Family",
+    title = "MetaT abundance vs cross-omic concordance",
+    subtitle = "16 genomes from top 5 families"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "top")
+```
+
+```{r 16-genomes-dynamics-subset}
+# Guarda la distribuzione TPM per campione per questi genomi
+genome_seasonal <- samples_all3 |>
+  filter(genome %in% target_genomes) |>
+  group_by(genome, genus, sample, family) |>
+  summarise(tpm = sum(tpm_t, na.rm = TRUE), .groups = "drop")
+
+# Aggiungi label solo all'ultimo timepoint
+last_point <- genome_seasonal |>
+  group_by(genome) |>
+  filter(sample == max(sample)) |>
+  ungroup()
+
+# Label al punto di massimo TPM per ogni genoma
+max_point <- genome_seasonal |>
+  group_by(genome) |>
+  filter(tpm == max(tpm)) |>
+  slice(1) |>
+  ungroup()
+
+ggplot(genome_seasonal, aes(x = sample, y = tpm, 
+                             group = genome, color = genus)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2) +
+  geom_text_repel(
+    data = max_point,
+    aes(label = genus, color = genus),
+    size = 3,
+    direction = "y",
+    segment.size = 0.3,
+    box.padding = 0.8,
+    point.padding = 0.3,
+    force = 5,
+    max.overlaps = 20
+  ) +
+  facet_wrap(~ family, scales = "free_y", ncol = 2) +
+  labs(
+    x = NULL,
+    y = "TPM (metaT)",
+    title = "Dynamics profiles  (TPM) by family",
+    subtitle = "16 genomes from top 5 families"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+    legend.position = "none",
+    strip.text = element_text(face = "bold")
+  )
+
+```
+
+### Among all levels?
+
+```{r among-all-levels}
+#| fig-height: 6.5
+# Livello 1 — tutte le ORF metaT
+level1 <- mt_10 |>
+  left_join(taxonomy, join_by(orf)) %>%
+  filter(genome %in% target_genomes, sample %in% keep_samples) |>
+  group_by(genome, genus, family, sample) |>
+  summarise(tpm = sum(tpm_t, na.rm = TRUE), .groups = "drop") |>
+  mutate(level = "All metaT ORFs")
+
+# Livello 2 — subsets metaP matched
+level2 <- samples_all3 |>
+  filter(genome %in% target_genomes) |>
+  group_by(genome, genus, family, sample) |>
+  summarise(tpm = sum(tpm_t, na.rm = TRUE), .groups = "drop") |>
+  mutate(level = "MetaP matched ORFs")
+
+# only sign orfs
+sig_orfs <- corr_mp_mt_ko |>
+  filter(p_adjust < 0.05) |>
+  pull(orf) |>
+  unique()
+
+# Livello 3 — solo ORF significative
+level3 <- samples_all3 |>
+  filter(genome %in% target_genomes,
+         orf %in% sig_orfs) |>
+  group_by(genome, genus, family, sample) |>
+  summarise(tpm = sum(tpm_t, na.rm = TRUE), .groups = "drop") |>
+  mutate(level = "Correlated ORFs")
+
+# Combina
+all_levels <- bind_rows(level1, level2, level3) |>
+  mutate(level = factor(level, levels = c("All metaT ORFs", 
+                                           "MetaP matched ORFs",
+                                           "Correlated ORFs")))
+
+# Colori per famiglia
+family_colors <- c(
+  "Burkholderiaceae"  = "#009E73",
+  "Cyanobiaceae"      = "#56B4E9",
+  "Nanopelagicaceae"  = "#E69F00",
+  "Pelagibacteraceae" = "#F0E442",
+  "Rhodobacteraceae"  = "#D55E00"
+)
+
+all_levels_norm <- all_levels |>
+  group_by(genome, level) |>
+  mutate(tpm_norm = (tpm - min(tpm)) / (max(tpm) - min(tpm))) |>
+  ungroup() %>%
+  mutate(
+    genome_label = paste0(genus, "\n", family),
+    family = factor(family, levels = c("Burkholderiaceae", "Cyanobiaceae",
+                                        "Nanopelagicaceae", "Pelagibacteraceae",
+                                        "Rhodobacteraceae"))
+  ) %>%
+  mutate(
+    genome_label = paste0(genus, "\n", family),
+    genome_label = fct_reorder(genome_label, as.integer(family))
+  )
+
+ggplot(all_levels_norm, aes(x = sample, y = tpm_norm,
+                             color = level, group = level)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 1) +
+  ggh4x::facet_wrap2(
+    ~ genome_label, ncol = 4, scales = "free_x",
+    strip = ggh4x::strip_themed(
+      background_x = ggh4x::elem_list_rect(
+        fill = family_colors[all_levels_norm |>
+                               distinct(genome_label, family) |>
+                               arrange(genome_label) |>
+                               pull(family)]
+      )
+    )
+  ) +
+  scale_color_manual(values = c(
+    "All metaT ORFs"     = "#E69F00",
+    "MetaP matched ORFs" = "#0072B2",
+    "Correlated ORFs"    = "#CC79A7"
+  )) +
+  labs(
+    x = NULL,
+    y = "Normalized TPM (0-1)",
+    color = NULL,
+    title = "Temporal profiles — all vs matched vs correlated ORFs",
+    subtitle = "Normalized per genome per level"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
+    legend.position = "top",
+    strip.text = element_text(face = "bold", size = 7, color = "white"),
+    panel.grid.minor = element_blank()
+  )
+```
+
+```{r}
+# Per ogni genoma, calcola quante ORF contribuiscono all'80% del TPM totale
+# (misura di dominanza — poche ORF dominanti = profilo poco rappresentativo)
+
+dominance <- mt_10 |>
+  left_join(taxonomy, join_by(orf)) |>
+  filter(genome %in% target_genomes, sample %in% keep_samples) |>
+  group_by(genome, orf) |>
+  summarise(mean_tpm = mean(tpm_t, na.rm = TRUE), .groups = "drop") |>
+  group_by(genome) |>
+  arrange(desc(mean_tpm)) |>
+  mutate(
+    cumsum_tpm = cumsum(mean_tpm),
+    total_tpm = sum(mean_tpm),
+    cum_prop = cumsum_tpm / total_tpm,
+    n_orf = row_number()
+  ) |>
+  summarise(
+    n_orf_80pct = min(n_orf[cum_prop >= 0.8]),
+    n_orf_total = n(),
+    prop_dominant = n_orf_80pct / n_orf_total,
+    .groups = "drop"
+  )
+
+dominance
+dominant_orfs <- mt_10 |>
+  left_join(taxonomy, join_by(orf)) |>
+  filter(genome %in% target_genomes, sample %in% keep_samples) |>
+  group_by(genome, orf) |>
+  summarise(mean_tpm = mean(tpm_t, na.rm = TRUE), .groups = "drop") |>
+  group_by(genome) |>
+  arrange(desc(mean_tpm)) |>
+  mutate(
+    cumsum_tpm = cumsum(mean_tpm),
+    total_tpm = sum(mean_tpm),
+    cum_prop = cumsum_tpm / total_tpm
+  ) |>
+  filter(cum_prop <= 0.8) |>
+  mutate(
+    in_metap = orf %in% matched_orfs,
+    in_corr = orf %in% sig_orfs
+  ) |>
+  group_by(genome) |>
+  summarise(
+    n_dominant = n(),
+    pct_in_metap = mean(in_metap) * 100,
+    pct_in_corr = mean(in_corr) * 100,
+    .groups = "drop"
+  )
+
+dominant_orfs |>
+  left_join(taxonomy |> distinct(genome, genus, family), by = "genome") |>
+  arrange(desc(pct_in_metap)) |>
+  select(genome, genus, family, n_dominant, pct_in_metap, pct_in_corr)
+
+dominant_orfs |>
+  left_join(taxonomy |> distinct(genome, genus, family), by = "genome") |>
+  mutate(
+    pattern = case_when(
+      pct_in_metap >= 10 ~ "Abundance-driven",
+      TRUE ~ "Function-specific"
+    ),
+    genus = fct_reorder(genus, pct_in_metap)
+  ) |>
+  ggplot(aes(x = pct_in_metap, y = genus, fill = family)) +
+  geom_col(width = 0.6, alpha = 0.85) +
+  geom_vline(xintercept = 10, linetype = "dashed", color = "grey50") +
+  scale_fill_manual(values = c(
+    "Burkholderiaceae"  = "#009E73",
+    "Cyanobiaceae"      = "#56B4E9",
+    "Nanopelagicaceae"  = "#E69F00",
+    "Pelagibacteraceae" = "#F0E442",
+    "Rhodobacteraceae"  = "#D55E00"
+  )) +
+  labs(
+    x = "% of dominant metaT ORFs also detected in metaP",
+    y = NULL, fill = "Family",
+    title = "Overlap between dominant metaT ORFs and metaP-matched ORFs",
+    subtitle = "Dashed line = 10% threshold separating abundance-driven from function-specific"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "right")
+```
+
+```{r}
+# Level 1 exclusive — All metaT ORFs EXCLUDING metaP-matched
+level1_exclusive <- mt_10 |>
+  left_join(taxonomy, join_by(orf)) |>
+  filter(genome %in% target_genomes,
+         sample %in% keep_samples,
+         !orf %in% matched_orfs) |>
+  group_by(genome, genus, family, sample) |>
+  summarise(tpm = sum(tpm_t, na.rm = TRUE), .groups = "drop") |>
+  mutate(level = "metaT excl. metaP")
+
+# Combina con i livelli esistenti
+all_levels_v2 <- bind_rows(level1, level2, level3, level1_exclusive) |>
+  mutate(level = factor(level, levels = c(
+    "All metaT ORFs",
+    "metaT excl. metaP",
+    "MetaP matched ORFs",
+    "Correlated ORFs"
+  )))
+
+# Normalizza
+all_levels_v2_norm <- all_levels_v2 |>
+  group_by(genome, level) |>
+  mutate(tpm_norm = (tpm - min(tpm)) / (max(tpm) - min(tpm))) |>
+  ungroup() |>
+  mutate(
+    genome_label = paste0(genus, "\n", family),
+    family = factor(family, levels = c("Burkholderiaceae", "Cyanobiaceae",
+                                       "Nanopelagicaceae", "Pelagibacteraceae",
+                                       "Rhodobacteraceae")),
+    genome_label = fct_reorder(genome_label, as.integer(family))
+  )
+
+# Plot
+ggplot(all_levels_v2_norm, aes(x = sample, y = tpm_norm,
+                                color = level, group = level)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 1) +
+  ggh4x::facet_wrap2(
+    ~ genome_label, ncol = 4, scales = "free_x",
+    strip = ggh4x::strip_themed(
+      background_x = ggh4x::elem_list_rect(
+        fill = family_colors[all_levels_v2_norm |>
+                               distinct(genome_label, family) |>
+                               arrange(genome_label) |>
+                               pull(family)]
+      )
+    )
+  ) +
+  scale_color_manual(values = c(
+    "All metaT ORFs"    = "#E69F00",
+    "metaT excl. metaP" = "#999999",
+    "MetaP matched ORFs"= "#0072B2",
+    "Correlated ORFs"   = "#CC79A7"
+  )) +
+  labs(
+    x = NULL,
+    y = "Normalized TPM (0-1)",
+    color = NULL,
+    title = "Temporal profiles — all vs exclusive vs matched vs correlated",
+    subtitle = "Grey = metaT ORFs excluding metaP-matched"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
+    legend.position = "top",
+    strip.text = element_text(face = "bold", size = 7, color = "white"),
+    panel.grid.minor = element_blank()
+  )
+
+# Per ogni genoma calcola correlazione tra 
+# profilo temporale di All metaT vs Correlated ORFs
+level_corr <- all_levels |>
+  # usa tpm grezzo, non normalizzato
+  pivot_wider(names_from = level, values_from = tpm) |>
+  group_by(genome, genus, family) |>
+  summarise(
+    r_all_vs_corr = cor(`All metaT ORFs`,
+                        `Correlated ORFs`,
+                        method = "spearman",
+                        use = "complete.obs"),
+    r_all_vs_matched = cor(`All metaT ORFs`,
+                           `MetaP matched ORFs`,
+                           method = "spearman",
+                           use = "complete.obs"),
+    .groups = "drop"
+  )
+ggplot(level_corr, aes(x = r_all_vs_matched, 
+                        y = r_all_vs_corr,
+                        color = family,
+                        label = genus)) +
+  geom_point(size = 3, alpha = 0.8) +
+  geom_text(size = 2.5, hjust = -0.1, check_overlap = TRUE) +
+  geom_abline(slope = 1, intercept = 0, 
+              linetype = "dashed", color = "grey50") +
+  labs(x = "Correlation: All metaT vs MetaP matched",
+       y = "Correlation: All metaT vs Correlated ORFs",
+       color = "Family",
+       title = "Temporal concordance between omic layers per genome") +
+  theme_minimal(base_size = 11)
+```
+
+```{r}
+# Top 10 genomi per TPM totale in metaT con presenza in metaP
+top10_genomes <- mt_10 |>
+  left_join(taxonomy, join_by(orf)) |>
+  filter(!is.na(genome)) |>
+  group_by(genome, genus, family) |>
+  summarise(total_tpm = sum(tpm_t, na.rm = TRUE), .groups = "drop") |>
+  # filtra solo genomi presenti in metaP
+  filter(genome %in% unique(meta_match_ko$genome)) |>
+  arrange(desc(total_tpm)) |>
+  slice_head(n = 10) |>
+  pull(genome)
+
+# Ricalcola i livelli per top 10
+level1_top10 <- mt_10 |>
+  left_join(taxonomy, join_by(orf)) |>
+  filter(genome %in% top10_genomes,
+         sample %in% keep_samples) |>
+  group_by(genome, genus, family, sample) |>
+  summarise(tpm = sum(tpm_t, na.rm = TRUE), .groups = "drop") |>
+  mutate(level = "All metaT ORFs")
+
+level2_top10 <- samples_all3 |>
+  filter(genome %in% top10_genomes) |>
+  group_by(genome, genus, family, sample) |>
+  summarise(tpm = sum(tpm_t, na.rm = TRUE), .groups = "drop") |>
+  mutate(level = "MetaP matched ORFs")
+
+level3_top10 <- samples_all3 |>
+  filter(genome %in% top10_genomes,
+         orf %in% sig_orfs) |>
+  group_by(genome, genus, family, sample) |>
+  summarise(tpm = sum(tpm_t, na.rm = TRUE), .groups = "drop") |>
+  mutate(level = "Correlated ORFs")
+
+all_levels_top10 <- bind_rows(level1_top10, level2_top10, level3_top10) |>
+  mutate(level = factor(level, levels = c("All metaT ORFs",
+                                           "MetaP matched ORFs",
+                                           "Correlated ORFs"))) |>
+  group_by(genome, level) |>
+  mutate(tpm_norm = (tpm - min(tpm)) / (max(tpm) - min(tpm))) |>
+  ungroup() |>
+  mutate(
+    genome_label = paste0(genus, "\n", family),
+    genome_label = fct_reorder(genome_label, as.integer(factor(family)))
+  )
+
+# Plot
+ggplot(all_levels_top10, aes(x = sample, y = tpm_norm,
+                              color = level, group = level)) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 1.5) +
+  facet_wrap(~ genome_label, ncol = 5, scales = "free_x") +
+  scale_color_manual(values = c(
+    "All metaT ORFs"     = "#E69F00",
+    "MetaP matched ORFs" = "#0072B2",
+    "Correlated ORFs"    = "#CC79A7"
+  )) +
+  labs(x = NULL, y = "Normalized TPM (0-1)",
+       color = NULL,
+       title = "Top 10 metaT genomes — temporal profiles across omic layers") +
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
+    legend.position = "top",
+    strip.text = element_text(face = "bold", size = 8),
+    panel.grid.minor = element_blank()
+  )
+```
+
+```{r}
+# aggiungi varianza temporale come predictor
+orfs_variance <- meta_match_ko |>
+  group_by(orf) |>
+  summarise(
+    corr = first(corr),
+    cv_metaT = sd(tpm_t, na.rm = TRUE) / mean(tpm_t, na.rm = TRUE),
+    cv_metaP = sd(tpm_p, na.rm = TRUE) / mean(tpm_p, na.rm = TRUE)
+  )
+
+# correlazione tra varianza e concordanza
+cor.test(orfs_variance$cv_metaT, orfs_variance$corr, method = "spearman")
+
+# modello con tutti i predictors
+model_data <- meta_match_ko |>
+  group_by(orf, genome, family) |>
+  summarise(
+    corr = first(corr),
+    mean_tpm = mean(tpm_t, na.rm = TRUE),
+    cv_metaT = sd(tpm_t, na.rm = TRUE) / mean(tpm_t, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+lm_full <- lm(corr ~ log10(mean_tpm) + cv_metaT + family, 
+              data = model_data)
+summary(lm_full)
+```
+
+### How divergent are specific KOs?
+
+```{r divergent-genomes}
+divergent_genomes <- c("LMO180529_SemiBin_1",  # Algicoccus
+                        "LMO130801_bin.108",     # MW101C3
+                        "LMO181010_SemiBin_57",  # Vulcanococcus
+                        "LMO161215_bin_7",       # MAG-120802
+                        "LMO190122_SemiBin_33",  # UBA5972
+                        "LMO160518_bin_11")       # RS62
+
+top_ko_divergent <- corr_mp_mt_ko |>
+  filter(genome %in% divergent_genomes, p_adjust < 0.05) |>
+  group_by(genome, genus, ko, ko_def) |>
+  summarise(
+    n_orf = n_distinct(orf),
+    mean_corr = round(mean(corr), 3),
+    .groups = "drop"
+  ) |>
+  group_by(genome) |>
+  slice_max(mean_corr, n = 5) |>
+  ungroup() |>
+  arrange(genome, desc(mean_corr))
+
+# Prepara label genus + family
+genus_family_label <- corr_mp_mt_ko |>
+  filter(genome %in% divergent_genomes) |>
+  distinct(genus, family) |>
+  mutate(genus_label = paste0(genus, "\n(", family, ")"))
+
+# Join con top_ko_divergent
+top_ko_plot <- top_ko_divergent |>
+  left_join(genus_family_label, by = "genus") |>
+  mutate(
+    ko_label = str_wrap(ko_def, width = 30),
+    genus_label = factor(genus_label),
+    ko_label = fct_reorder(ko_label, mean_corr)
+  )
+
+ggplot(top_ko_plot, aes(x = mean_corr, y = ko_label, fill = genus)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = round(mean_corr, 2)),
+            hjust = -0.2, size = 3) +
+  facet_wrap(~ genus_label, scales = "free_y", ncol = 2) +
+  scale_fill_manual(values = c(
+    "MW101C3"      = "#56B4E9",
+    "RS62"         = "#009E73",
+    "MAG-120802"   = "#E69F00",
+    "Algicoccus"   = "#009E73",
+    "Vulcanococcus"= "#56B4E9",
+    "UBA5972"      = "#D55E00"
+  )) +
+  labs(
+    x = "Mean Spearman correlation",
+    y = NULL,
+    title = "Top 5 correlated KOs per divergent genome",
+    subtitle = "ORFs with independent temporal dynamics (metaT vs metaP)"
+  ) +
+  theme_minimal(base_size = 10) +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold", size = 9),
+    panel.grid.major.y = element_blank()
+  ) +
+  expand_limits(x = 1.05)
+
+
+```
+
+**Observations — Top 5 correlated KOs per divergent genome**
+
+Each divergent genome shows a distinct functional signature among its top correlated KOs, indicating taxon-specific cross-omic concordance:
+
+- **MW101C3 (Cyanobiaceae):** ferredoxin-NADP+ reductase (r=0.97, highest in dataset), pentose phosphate pathway enzymes — phototrophic energy metabolism
+
+- **Algicoccus (Burkholderiaceae):** peptide/nickel and iron(III) transport system proteins — micronutrient acquisition, consistent with algae-bacteria interactions in coastal marine environments
+
+- **Vulcanococcus (Cyanobiaceae):** cholesterol oxidase, cytochrome b6, phycocyanin — photosynthetic electron transport and unusual lipid metabolism
+
+- **RS62 (Burkholderiaceae):** branched-chain amino acid transport, cobalamin biosynthesis — amino acid acquisition and vitamin B12 metabolism
+
+- **MAG-120802 (Nanopelagicaceae):** NADH-quinone oxidoreductase, ribosomal proteins, trigger factor — respiratory chain and translational stress response
+
+- **UBA5972 (Rhodobacteraceae):** GroEL chaperonin dominant — stress response and protein folding
+
+Overall, divergent genomes show ecologically interpretable functional signatures that go beyond what would be expected from abundance alone, supporting the biological relevance of cross-omics concordance in these specific taxa.
+
+## Do we still have good representation of highly expressed ORFs going from metaT to metaP?
+
+```{r how-good-representation-metat-metap}
+# Rank ORF per TPM medio in metaT
+orf_rank <- mt_10 |>
+  group_by(orf) |>
+  summarise(mean_tpm = mean(tpm_t, na.rm = TRUE)) |>
+  arrange(desc(mean_tpm)) |>
+  mutate(
+    rank = row_number(),
+    is_metap = orf %in% matched_orfs,
+    is_sign = orf %in% sig_orfs
+  )
+
+library(magrittr)
+
+orf_rank_plot <- orf_rank |>
+  mutate(group = case_when(
+    is_sign  ~ "Correlated ORFs",
+    is_metap ~ "MetaP matched",
+    TRUE     ~ "All metaT"
+  )) |>
+  filter(mean_tpm > 0,
+         rank < 300)
+
+ggplot() +
+  geom_point(data = orf_rank_plot |> filter(group == "All metaT"),
+             aes(x = rank, y = mean_tpm, color = group),
+             alpha = 0.5, size = 2) +
+  geom_point(data = orf_rank_plot |> filter(group == "MetaP matched"),
+             aes(x = rank, y = mean_tpm, color = group),
+             alpha = 0.8, size = 2) +
+  geom_point(data = orf_rank_plot |> filter(group == "Correlated ORFs"),
+             aes(x = rank, y = mean_tpm, color = group),
+             alpha = 1, size = 3) +
+  scale_y_log10() +
+  scale_color_manual(values = c(
+    "All metaT"       = "#D3D1C7",
+    "MetaP matched"   = "#0072B2",
+    "Correlated ORFs" = "#CC79A7"
+  )) +
+  labs(x = "ORF rank (by mean TPM)", y = "Mean TPM (log)",
+       color = NULL,
+       title = "MetaP coverage along metaT expression ranking") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "top")
+```
+
+**Observations — MetaP coverage along metaT expression ranking**
+
+Among the top 300 most highly expressed ORFs in metaT, only a small fraction is detected in the metaP subset (blue dots) and even fewer show significant metaT/metaP correlation (pink dots). The most highly expressed ORFs in metaT (rank \< 10) are not represented in metaP at all. MetaP-matched ORFs appear from rank \~10 onwards but remain sparse, and correlated ORFs are only visible at rank \> 250 — among the lower end of the top 300. This confirms that metaP does not preferentially capture the most transcriptionally active ORFs in the community.
+
+```{r}
+# Aggiungi percentile a orf_rank (su tutte le ORF, non solo top 300)
+orf_rank_full <- orf_rank |>
+  filter(mean_tpm > 0) |>
+  mutate(
+    percentile = cut(rank, 
+                     breaks = quantile(rank, probs = seq(0, 1, 0.1)),
+                     labels = paste0(seq(10, 100, 10), "%"),
+                     include.lowest = TRUE),
+    group = case_when(
+      is_sign  ~ "Correlated ORFs",
+      is_metap ~ "MetaP matched",
+      TRUE     ~ "All metaT"
+    )
+  )
+
+# Calcola proporzione per percentile
+percentile_summary <- orf_rank_full |>
+  group_by(percentile, group) |>
+  summarise(n = n(), .groups = "drop") |>
+  group_by(percentile) |>
+  mutate(prop = n / sum(n)) |>
+  ungroup()
+
+# Plot
+ggplot(percentile_summary, aes(x = percentile, y = prop, fill = group)) +
+  geom_col(position = "stack") +
+  scale_fill_manual(values = c(
+    "All metaT"       = "#D3D1C7",
+    "MetaP matched"   = "#0072B2",
+    "Correlated ORFs" = "#CC79A7"
+  )) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "MetaT expression percentile (10% bins)",
+       y = "Proportion of ORFs",
+       fill = NULL,
+       title = "Distribution of metaP-matched and correlated ORFs\nacross metaT expression percentiles") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "top")
+
+percentile_summary |>
+  filter(group != "All metaT") |>
+  ggplot(aes(x = percentile, y = prop, fill = group)) +
+  geom_col(position = "dodge") +
+  scale_fill_manual(values = c(
+    "MetaP matched"   = "#0072B2",
+    "Correlated ORFs" = "#CC79A7"
+  )) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "MetaT expression percentile (10% bins)",
+       y = "Proportion of ORFs within group",
+       fill = NULL,
+       title = "Distribution of metaP-matched and correlated ORFs\nacross metaT expression percentiles") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "top")
+```
+
+### Any relevant presence of C, N or P cycling?
+
+```{r c-n-p-cycling}
+#| fig-height: 20
+# Definisci le categorie funzionali dal gene list
+functional_categories <- list(
+  N_cycling    = c("K00370","K00371","K00374","K00368","K15864",
+                   "K04561","K02305", "K03385","K02588","K02586",
+                   "K02591","K00531","K10944","K10945","K10946"),
+  P_cycling    = c("K02038","K02036","K02037","K02040","K16322",
+                   "K03306","K14640", "K00937","K22468","K01514",
+                   "K01524","K01077","K01113","K07657"),
+  C_fixation   = c("K01601","K01602","K01963","K03518","K03519","K03520"),
+  Thiamine_B1  = c("K00788","K03149","K03148","K03147","K03146",
+                   "K03151","K03150","K03153","K03154","K03707",
+                   "K00768","K01935","K01906"),
+  Cobalamin_B12= c("K19221","K02224","K02225","K02226","K02227",
+                   "K02231","K02232", "K02233","K09386","K22316",
+                   "K22699","K19562","K19563","K21219","K21700"),
+  Rhodopsins   = c("K04641","K04643"),
+  Biotin_B7    = c("K00652","K00833","K00878","K01012","K08965",
+                   "K03769","K16593","K16789","K17712")
+)
+
+# Controlla quali sono nelle correlazioni significative
+sig_ko_list <- corr_mp_mt_ko |>
+  filter(!is.na(ko), p_adjust < 0.05) |>
+  distinct(ko, ko_def, corr, genome, family)
+
+map_dfr(names(functional_categories), function(cat) {
+  sig_ko_list |>
+    filter(ko %in% functional_categories[[cat]]) |>
+    mutate(category = cat)
+}) |>
+  group_by(category, ko, ko_def) |>
+  summarise(
+    n_orf = n(),
+    mean_corr = round(mean(corr), 3),
+    n_genomes = n_distinct(genome),
+    n_families = n_distinct(family),
+    .groups = "drop"
+  ) |>
+  arrange(category, desc(mean_corr))
+```
+
+The analysis showed that we found only 2 KOs among all related to C,N,P cycling correlating. all the others simply do not correlates.
+
+### What if we look at all 5k ORFs?
+
+```{r c-n-p-all-5k-orfs}
+#| fig-height: 10
+# Delle ~5k ORF metaP-matched, quante hanno KO delle categorie funzionali?
+meta_match_ko |>
+  filter(!is.na(ko)) |>
+  mutate(category = case_when(
+    ko %in% functional_categories$N_cycling     ~ "N cycling",
+    ko %in% functional_categories$P_cycling     ~ "P cycling",
+    ko %in% functional_categories$C_fixation    ~ "C fixation",
+    ko %in% functional_categories$Rhodopsins    ~ "Rhodopsins",
+    ko %in% functional_categories$Cobalamin_B12 ~ "Cobalamin B12",
+    ko %in% functional_categories$Thiamine_B1   ~ "Thiamine B1",
+    ko %in% functional_categories$Biotin_B7     ~ "Biotin B7",
+    TRUE ~ NA_character_
+  )) |>
+  filter(!is.na(category)) |>
+  group_by(category) |>
+  summarise(
+    n_orf = n_distinct(orf),
+    n_ko = n_distinct(ko),
+    .groups = "drop"
+  ) |>
+  arrange(desc(n_orf))
+
+# ORF delle categorie funzionali nel subset metaP
+functional_orfs <- meta_match_ko |>  # dataset completo ~5k ORF
+  filter(!is.na(ko)) |>
+  mutate(category = case_when(
+    ko %in% functional_categories$N_cycling     ~ "N cycling",
+    ko %in% functional_categories$P_cycling     ~ "P cycling",
+    ko %in% functional_categories$C_fixation    ~ "C fixation",
+    ko %in% functional_categories$Rhodopsins    ~ "Rhodopsins",
+    ko %in% functional_categories$Cobalamin_B12 ~ "Cobalamin B12",
+    ko %in% functional_categories$Thiamine_B1   ~ "Thiamine B1",
+    ko %in% functional_categories$Biotin_B7     ~ "Biotin B7",
+    TRUE ~ NA_character_
+  )) |>
+  filter(!is.na(category)) |>
+  distinct(orf, ko, ko_def, category, genome, family, genus)
+
+meta_match_ko <- meta_match_ko %>%
+  filter(orf %in% functional_orfs$orf) %>%
+  left_join(functional_orfs |> select(orf,category), join_by(orf))
+
+# Pivot long per i tre layer omici
+functional_long <- meta_match_ko |>
+  pivot_longer(
+    cols = c(tpm_t, tpm_g, tpm_p),
+    names_to = "layer",
+    values_to = "abundance"
+  ) |>
+  mutate(
+    layer = recode(layer,
+      tpm_t = "MetaT",
+      tpm_g = "MetaG", 
+      tpm_p = "MetaP"
+    ),
+    layer = factor(layer, levels = c("MetaT", "MetaG", "MetaP")),
+    orf_label = paste0(genus, "\n(", ko, ")")
+  ) |>
+  filter(!is.na(abundance), abundance > 0)
+
+# Normalizza 0-1 per ORF e layer
+functional_norm <- functional_long |>
+  group_by(orf, layer) |>
+  mutate(abundance_norm = (abundance - min(abundance)) / 
+                          (max(abundance) - min(abundance))) |>
+  ungroup()
+
+# Plot
+p0 <- ggplot(functional_norm, aes(x = sample, y = abundance_norm,
+                             color = layer, group = interaction(orf, layer))) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 1.5) +
+  facet_wrap(~ category + orf_label, scales = "free_y", ncol = 4) +
+  scale_color_manual(values = c(
+    "MetaT" = "#E69F00",
+    "MetaG" = "#0072B2",
+    "MetaP" = "#CC79A7"
+  )) +
+  labs(
+    x = NULL, y = "Normalized abundance (0-1)",
+    color = NULL,
+    title = "Temporal dynamics of functional ORFs across omic layers",
+    subtitle = "C fixation, P cycling, vitamins — metaP-matched but not significantly correlated"
+  ) +
+  theme_minimal(base_size = 9) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
+    legend.position = "top",
+    strip.text = element_text(size = 7, face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+
+
+```
+
+**Observations — Temporal dynamics of functional ORFs (C fixation, P cycling, vitamins)**
+
+31 ORFs from ecologically relevant categories are detected in the metaP subset. N cycling and rhodopsins are entirely absent from metaP. For the 31 detected ORFs, metaT, metaG, and metaP rarely show concordant temporal dynamics. Three patterns:
+
+- **CO dehydrogenase (coxSML):** metaP peaks when metaT/metaG are low and vice versa — strong discordance across Algicoccus, RS62, Planktophila
+
+- **RuBisCO (rbcSL):** metaG stable, metaT seasonally variable, metaP independent — three layers measure different things for the same function
+
+- **Phosphate transport (pstS):** metaT shows seasonal variation, metaP is consistently flat — protein not dynamically detected despite active transcription
+
+- **Cobalamin B12 (UBA10365):** no concordance even in the genome with strongest overall cross-omic signal — concordance is function-specific, not genome-wide
+
+**Key message:** metaP detects these functions but does not capture their temporal dynamics. Whether this reflects biological decoupling, protein stability, or MS detection limits cannot be resolved with these data alone.
+
+### Conclusions
+
+**Observations — mRNA/protein decoupling: literature support for observed patterns**
+
+The differential concordance observed between metaT and metaP across functional categories is consistent with findings from isolate-based studies:
+
+**Housekeeping vs. stress-responsive genes:** Essential and housekeeping genes (ribosomes, central metabolism) show systematically higher mRNA-protein correlations than environmentally responsive genes, a pattern that is further reduced under stress conditions — documented in bacterial pathogens *Salmonella*, *Yersinia*, and *Staphylococcus* (Preprint, bioRxiv 2026).
+
+**P cycling decoupling:** In the marine green alga *Micromonas commoda* under phosphate limitation, 70% of proteins that change significantly are not differentially expressed at the mRNA level (Bachy et al., 2018, *Nature Microbiology*). This directly mirrors the flat metaP profile for pstS (K02040) despite seasonally variable metaT signal observed in our dataset.
+
+**Phosphate transport proteins in marine metaproteomics:** Phosphate transport proteins (pstS and equivalents) have been detected by metaproteomics in SAR11, *Prochlorococcus*, and *Synechococcus* in the Sargasso Sea, where their detection was interpreted as a signal of nutrient status rather than of transcriptional activity (Morris et al., 2010, *ISME Journal*). This supports the interpretation that metaP detection of pstS reflects protein pool stability rather than dynamic transcriptional regulation.
+
+**Oligotrophic bacteria — reduced transcriptional regulation:** Aquatic oligotrophs show limited transcriptional regulation at the global level, as evidenced by poor mRNA-protein correlations in transcriptomic/proteomic comparisons (Giovannoni et al., review cited in Roseobacter proteomics literature). This is consistent with the low concordance observed for Pelagibacteraceae in our dataset.
+
+**Key references:**
+
+- bioRxiv 2026 — bacterial stress responses lower mRNA-protein correlations; essential genes show stronger concordance
+
+- Bachy et al. 2018, *Nature Microbiology* — proteome/transcriptome decoupling under P limitation in marine microalgae
+
+- Morris et al. 2010, *ISME Journal* — phosphate transport proteins in marine metaproteomics; proteomic detection as nutrient status indicator
+
+- Giovannoni lab reviews — reduced transcriptional regulation in aquatic oligotrophs
+
+**Observations — Protein half-life and mRNA/protein decoupling: literature context**
+
+The differential concordance between metaT and metaP across functional categories is partially consistent with known differences in protein stability between functional classes. However, direct half-life measurements for the specific proteins observed in this study are not available for marine bacteria, and the following should be considered as a working hypothesis rather than an established fact.
+
+**What the literature supports:** Proteins required for growth — including ribosomal proteins and core metabolic enzymes — are generally stable or slowly degraded in bacteria, while fast-degrading proteins tend to have roles in metal binding, stress response, and transcriptional regulation (Tarazona et al., ResearchGate; Tompa et al.). Large protein complexes such as ribosomes are among the most long-lived proteins in the cell, with highly similar turnover rates across their components. This is consistent with the strong metaT/metaP concordance observed for ribosomal proteins in our dataset.
+
+**What complicates the hypothesis:** For pstS specifically, mRNA stability in *E. coli* is enhanced by a REP sequence downstream of the pstS locus, resulting in elevated transcript and protein levels (Spira et al., 2008, *Archives of Microbiology*). This suggests that the absence of concordance for pstS in our dataset may reflect transcriptional regulation dynamics rather than short protein half-life per se.
+
+**Overall conclusion:** The hypothesis that non-concordant proteins have shorter half-lives than concordant ones is plausible and consistent with general principles of bacterial protein homeostasis, but cannot be directly tested with the available data. Dedicated pulse-chase or SILAC experiments in relevant marine bacteria would be required to confirm this interpretation.
+
+**Key references:**
+
+- Tarazona et al. (ResearchGate) — ribosomal and growth-related proteins are stable; stress-responsive proteins are fast-degrading
+
+- Morita et al. (PMC3570024) — ribosomal complexes among the longest-lived proteins in the cell
+
+- Spira et al., 2008, *Archives of Microbiology* — pstS mRNA stability in *E. coli* regulated by REP sequence
+
+### Jose's questions
+
+#### Tra le \~5k ORF metaP-matched, quelle che correlano appartengono a KEGG pathway diversi da quelle che non correlano?
+
+```{r jose-question-2}
+
+# variable with all ORFs and correlation and KOs
+corr_mp_mt_all_ko <- corr_mp_mt_all |>
+  left_join(ko, join_by(orf))
+
+# Dividi le ~5k ORF in due gruppi
+orfs_correlated <- corr_mp_mt_all_ko |>
+  left_join(ko, join_by(orf)) %>%
+  filter(p_adjust < 0.05) |>
+  distinct(orf) |>
+  pull(orf)
+
+orfs_not_correlated <- corr_mp_mt_all_ko |>
+  filter(p_adjust >= 0.05 | is.na(p_adjust)) |>
+  distinct(orf) |>
+  pull(orf)
+
+# Per ogni pathway, conta ORF nei due gruppi
+pathway_enrichment <- corr_mp_mt_all_ko |>
+  left_join(ko_pathway, join_by(ko)) %>%
+  left_join(pathway_names, join_by(pathway)) %>%
+  filter(!is.na(pathway)) |>
+  mutate(group = ifelse(orf %in% orfs_correlated, "correlated", "not_correlated")) |>
+  group_by(pathway, name, group) |>
+  summarise(n = n_distinct(orf), .groups = "drop") |>
+  pivot_wider(names_from = group, values_from = n, values_fill = 0) |>
+  mutate(
+    total_corr = length(orfs_correlated),
+    total_not  = length(orfs_not_correlated),
+    p_fisher   = pmap_dbl(list(correlated, not_correlated, total_corr, total_not), 
+      function(a, b, tc, tn) {
+        fisher.test(matrix(c(a, b, tc - a, tn - b), nrow = 2))$p.value
+      }),
+    p_adjust = p.adjust(p_fisher, method = "BH")
+  ) |>
+  arrange(p_adjust)
+
+pathway_enrichment |>
+  filter(!is.na(name)) |>
+  mutate(prop_corr = correlated / (correlated + not_correlated),
+         total = correlated + not_correlated) |>
+  filter(total >= 10) |>  # soglia più alta per ridurre
+  mutate(category = case_when(
+    str_detect(name, "Ribosome|tRNA|translation|RNA") ~ "Translation",
+    str_detect(name, "transport|ABC|phosphate") ~ "Transport",
+    str_detect(name, "phosphorylation|Photosyn|carbon|TCA|glycol|pentose|pyruvate|fixation") ~ "Energy/Carbon",
+    str_detect(name, "Quorum|Two-component|signaling") ~ "Signaling",
+    TRUE ~ "Other"
+  )) |>
+  arrange(prop_corr) |>
+  mutate(name = factor(name, levels = name)) |>
+  ggplot(aes(x = prop_corr, y = name, size = total, color = category)) +
+  geom_point() +
+  geom_vline(xintercept = 0.5, linetype = "dashed", color = "grey50") +
+  scale_color_manual(values = c(
+    "Translation"  = "#CC79A7",
+    "Transport"    = "#0072B2",
+    "Energy/Carbon"= "#E69F00",
+    "Signaling"    = "#009E73",
+    "Other"        = "#D3D1C7"
+  )) +
+  labs(x = "Proportion of correlated ORFs", y = NULL,
+       size = "Total ORFs", color = "Category",
+       title = "Proportion of correlated ORFs by KEGG pathway",
+       subtitle = "Among metaP-matched ORFs (pathways with n \u2265 5)") +
+  theme_minimal(base_size = 10) +
+  theme(legend.position = "right")
+```
+
+#### Do genes correlate simply because they are highly expressed?
+
+```{r jose-question-3}
+#| warning: false
+meta_match_ko <- meta_match %>%
+  select(-tpm_g) %>%
+  filter(sample %in% samples_keep) %>%
+  left_join(corr_mp_mt_all, join_by(orf)) %>%
+  left_join(ko, join_by(orf)) %>%
+  left_join(ko_pathway, join_by(ko)) %>%
+  left_join(pathway_names, join_by(pathway))
+  
+tpm_corr_plot <- meta_match_ko |>
+  group_by(orf) |>
+  summarise(
+    mean_tpm = mean(tpm_t, na.rm = TRUE),
+    corr = first(corr),
+    is_sig = first(p_adjust) < 0.05
+  ) |>
+  filter(!is.na(corr), mean_tpm > 0)
+
+# scatter plot
+ggplot(tpm_corr_plot, aes(x = log10(mean_tpm), y = corr, color = is_sig)) +
+  geom_point(alpha = 0.3, size = 0.8) +
+  geom_smooth(method = "lm", color = "black", linewidth = 0.8, formula = 'y~x') +
+  scale_color_manual(values = c("FALSE" = "#D3D1C7", "TRUE" = "#CC79A7"),
+                     labels = c("Not significant", "Significant")) +
+  labs(x = "Mean TPM metaT (log10)", y = "Spearman correlation",
+       color = NULL,
+       title = "Does expression level predict metaT/metaP concordance?") +
+  theme_minimal(base_size = 11) +
+  theme(legend.position = "top")
+
+lm_fit <- lm(corr ~ log10(mean_tpm), data = tpm_corr_plot)
+summary(lm_fit)
+```
+
+```{r}
+#| warning: false
+# is Taxonomy driving the correlation?
+kruskal.test(corr ~ family, data = meta_match_ko)
+
+meta_match_ko |>
+  group_by(orf, family) |>
+  filter(!is.na(family)) %>%
+  summarise(corr = first(corr), .groups = "drop") |>
+  group_by(family) |>
+  filter(n() >= 20) |>  # solo famiglie con almeno 20 ORF
+  ungroup() |>
+  mutate(family = fct_reorder(family, corr, median)) |>
+  ggplot(aes(x = corr, y = family)) +
+  geom_boxplot(outlier.size = 0.5, fill = "#1D9E75", alpha = 0.4) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+  labs(x = "Spearman correlation", y = NULL,
+       title = "Distribution of metaT/metaP correlation by family") +
+  theme_minimal(base_size = 10)
+
+# separa per metodo
+meta_match_ko |>
+  group_by(orf, family) |>
+  summarise(
+    corr = first(corr),
+    is_sig = first(p_adjust) < 0.05,
+    .groups = "drop"
+  ) |>
+  group_by(family) |>
+  filter(n() >= 20) |>
+  summarise(
+    n_total = n(),
+    n_sig = sum(is_sig),
+    prop_sig = n_sig / n_total,
+    .groups = "drop"
+  ) |>
+  mutate(
+    family = fct_reorder(family, prop_sig),
+    reliability = case_when(
+      n_total >= 200 ~ "High (n ≥ 200)",
+      n_total >= 50  ~ "Medium (n ≥ 50)",
+      TRUE           ~ "Low (n < 50)"
+    ),
+    reliability = factor(reliability, levels = c("High (n ≥ 200)", "Medium (n ≥ 50)", "Low (n < 50)"))
+  ) |>
+  ggplot(aes(x = prop_sig, y = family, size = n_total, color = reliability)) +
+  geom_point(alpha = 0.8) +
+  geom_vline(xintercept = 0.5, linetype = "dashed", color = "grey50") +
+  scale_color_manual(values = c(
+    "High (n ≥ 200)"  = "#1D9E75",
+    "Medium (n ≥ 50)" = "#E69F00",
+    "Low (n < 50)"    = "#D3D1C7"
+  )) +
+  labs(x = "Proportion of significant ORFs", y = NULL,
+       size = "Total ORFs", color = "Reliability",
+       title = "Proportion of concordant ORFs by family") +
+  theme_minimal(base_size = 10)
+
+# Eta-squared per Kruskal-Wallis
+# eta^2 = (H - k + 1) / (n - k)
+# dove H = chi-squared, k = n gruppi, n = n totale osservazioni
+
+# n = numero totale di righe usate nel test
+# rifai il test sul dataframe corretto
+kw_data <- meta_match_ko |>
+  group_by(orf, family) |>
+  summarise(corr = first(corr), .groups = "drop") |>
+  group_by(family) |>
+  filter(n() >= 20) |>
+  ungroup()
+
+kw_test <- kruskal.test(corr ~ family, data = kw_data)
+kw_test
+
+# poi calcola eta squared
+H <- kw_test$statistic
+k <- kw_test$parameter + 1  # df + 1 = numero di gruppi
+n <- nrow(kw_data)
+
+eta_squared <- (H - k + 1) / (n - k)
+eta_squared
+```
+
+```{r jose-question-2-genome-level}
+kw_data_genome <- meta_match_ko |>
+  group_by(orf, genome) |>
+  summarise(corr = first(corr), .groups = "drop") |>
+  group_by(genome) |>
+  filter(n() >= 20) |>
+  ungroup()
+
+kw_test_genome <- kruskal.test(corr ~ genome, data = kw_data_genome)
+kw_test_genome
+
+H <- kw_test_genome$statistic
+k <- kw_test_genome$parameter + 1
+n <- nrow(kw_data_genome)
+
+eta_squared_genome <- (H - k + 1) / (n - k)
+eta_squared_genome
+
+
+tibble(
+  level = c("Expression (TPM)", "Family", "Genome"),
+  eta2  = c(0.003, 0.14, 0.33)
+) |>
+  mutate(level = factor(level, levels = c("Expression (TPM)", "Family", "Genome"))) |>
+  ggplot(aes(x = level, y = eta2, fill = level)) +
+  geom_col(width = 0.5, alpha = 0.85) +
+  geom_text(aes(label = scales::percent(eta2, accuracy = 0.1)),
+            vjust = -0.5, size = 4, fontface = "bold") +
+  scale_fill_manual(values = c(
+    "Expression (TPM)" = "#D3D1C7",
+    "Family"           = "#1D9E75",
+    "Genome"           = "#085041"
+  )) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 0.42)) +
+  labs(x = NULL, y = "Variance explained (eta\u00b2 / R\u00b2)",
+       title = "Predictors of metaT/metaP concordance",
+       subtitle = "Proportion of variance in correlation explained by each factor") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none")
+
+kw_data_pathway <- meta_match_ko |>
+  filter(!is.na(pathway)) |>
+  group_by(orf, pathway) |>
+  summarise(corr = first(corr), .groups = "drop") |>
+  group_by(pathway) |>
+  filter(n() >= 20) |>
+  ungroup()
+
+kw_test_pathway <- kruskal.test(corr ~ pathway, data = kw_data_pathway)
+kw_test_pathway
+
+H <- kw_test_pathway$statistic
+k <- kw_test_pathway$parameter + 1
+n <- nrow(kw_data_pathway)
+
+eta_squared_pathway <- (H - k + 1) / (n - k)
+eta_squared_pathway
+```
+
+#### Shannon diversity. are major differences within-samples?
+
+```{r}
+library(vegan)
+
+diversity_df <- meta_match_ko |>
+  group_by(sample) |>
+  summarise(
+    shannon_metaT = vegan::diversity(tpm_t, index = "shannon"),
+    shannon_metaP = vegan::diversity(tpm_p, index = "shannon"),
+    .groups = "drop"
+  ) |>
+  pivot_longer(
+    cols = c(shannon_metaT, shannon_metaP),
+    names_to = "layer",
+    values_to = "shannon"
+  ) |>
+  mutate(layer = recode(layer,
+    shannon_metaT = "MetaT",
+    shannon_metaP = "MetaP"
+  ))
+
+# plot
+ggplot(diversity_df, aes(x = layer, y = shannon, fill = layer)) +
+  geom_boxplot(width = 0.4, alpha = 0.8) +
+  geom_point(size = 2, alpha = 0.8) +
+  geom_line(aes(group = sample), color = "grey50", alpha = 0.5) +
+  scale_fill_manual(values = c("MetaT" = "#E69F00", "MetaP" = "#CC79A7")) +
+  labs(x = NULL, y = "Shannon diversity",
+       title = "Within-sample diversity: metaT vs metaP",
+       subtitle = "Among metaP-matched ORFs (n=4,729)") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none")
+
+
+meta_match_ko |>
+  group_by(sample) |>
+  summarise(
+    min_metaT = min(tpm_t, na.rm = TRUE),
+    max_metaT = max(tpm_t, na.rm = TRUE),
+    min_metaP = min(tpm_p, na.rm = TRUE),
+    max_metaP = max(tpm_p, na.rm = TRUE),
+    n_zero_metaT = sum(tpm_t == 0, na.rm = TRUE),
+    n_zero_metaP = sum(tpm_p == 0, na.rm = TRUE)
+  )
+
+
+# Pielou's evenness = Shannon / log(S)
+# dove S = numero di ORF rilevate per campione
+
+evenness_df <- meta_match_ko |>
+  group_by(sample) |>
+  summarise(
+    # metaT
+    H_metaT = vegan::diversity(tpm_t, index = "shannon"),
+    S_metaT = sum(tpm_t > 0),
+    J_metaT = H_metaT / log(S_metaT),
+    # metaP
+    H_metaP = vegan::diversity(tpm_p, index = "shannon"),
+    S_metaP = sum(tpm_p > 0),
+    J_metaP = H_metaP / log(S_metaP),
+    .groups = "drop"
+  ) |>
+  pivot_longer(
+    cols = c(J_metaT, J_metaP),
+    names_to = "layer",
+    values_to = "evenness"
+  ) |>
+  mutate(layer = recode(layer,
+    J_metaT = "MetaT",
+    J_metaP = "MetaP"
+  ))
+
+ggplot(evenness_df, aes(x = layer, y = evenness, fill = layer)) +
+  geom_boxplot(width = 0.4, alpha = 0.8) +
+  geom_point(size = 2) +
+  geom_line(aes(group = sample), color = "grey50", alpha = 0.5) +
+  scale_fill_manual(values = c("MetaT" = "#E69F00", "MetaP" = "#CC79A7")) +
+  labs(x = NULL, y = "Pielou's evenness (J)",
+       title = "Within-sample evenness: metaT vs metaP",
+       subtitle = "Among metaP-matched ORFs (n=4,729)") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none")
+
+meta_match_ko %>%
+  group_by(sample) %>%
+  summarise(sum_tpm = sum(tpm_p ))
+
+# distribuzione delle abbondanze per campione
+meta_match_ko |>
+  filter(sample == first(sample)) |>  # prendi un campione come esempio
+  pivot_longer(cols = c(tpm_t, tpm_p), 
+               names_to = "layer", values_to = "abundance") |>
+  filter(abundance > 0) |>
+  mutate(layer = recode(layer, tpm_t = "MetaT", tpm_p = "MetaP")) |>
+  ggplot(aes(x = log10(abundance), fill = layer)) +
+  geom_density(alpha = 0.5) +
+  scale_fill_manual(values = c("MetaT" = "#E69F00", "MetaP" = "#CC79A7")) +
+  labs(x = "log10 abundance", y = "Density",
+       title = "Distribution of abundances within one sample") +
+  theme_minimal(base_size = 12)
+```
+
+```{r}
+library(KEGGREST)
+
+# prendi tutti i KO unici dal tuo dataset
+ko_list <- meta_match_ko |>
+  filter(!is.na(ko)) |>
+  distinct(ko) |>
+  pull(ko)
+
+# per ogni KO recupera i moduli associati
+# KEGGREST accetta max 10 query alla volta
+ko_modules <- map_dfr(split(ko_list, ceiling(seq_along(ko_list)/10)), function(batch) {
+  result <- keggGet(batch)
+  map_dfr(result, function(entry) {
+    if (!is.null(entry$MODULE)) {
+      tibble(
+        ko = entry$ENTRY,
+        module = names(entry$MODULE),
+        module_name = unlist(entry$MODULE)
+      )
+    }
+  })
+})
+
+ko_modules
+```
+
+```{r}
+# Funzione per calcolare eta² per ogni livello tassonomico
+calc_eta2 <- function(data, group_var, min_n = 20) {
+  d <- data |>
+    group_by(orf, across(all_of(group_var))) |>
+    summarise(corr = first(corr), .groups = "drop") |>
+    group_by(across(all_of(group_var))) |>
+    filter(n() >= min_n) |>
+    ungroup()
+  
+  kw <- kruskal.test(reformulate(group_var, "corr"), data = d)
+  
+  H <- kw$statistic
+  k <- kw$parameter + 1
+  n <- nrow(d)
+  eta2 <- (H - k + 1) / (n - k)
+  
+  tibble(
+    level = group_var,
+    eta2 = eta2,
+    n_groups = k,
+    n_obs = n,
+    p_value = kw$p.value
+  )
+}
+
+# Applica a tutti i livelli tassonomici
+# Assumi che taxonomy abbia colonne: orf, phylum, class, order, family, genome
+levels_to_test <- c("phylum", "class", "order", "family", "genome", "orf")
+
+results_hierarchy <- map_dfr(levels_to_test, function(lv) {
+  if (lv == "orf") {
+    # A livello ORF ogni ORF è il suo proprio gruppo
+    # eta² = varianza spiegata dall'identità specifica dell'ORF
+    d <- meta_match_ko |>
+      group_by(orf) |>
+      filter(n() >= 5) |>  # almeno 5 timepoints
+      ungroup()
+    kw <- kruskal.test(corr ~ orf, data = d)
+    H <- kw$statistic
+    k <- kw$parameter + 1
+    n <- nrow(d)
+    tibble(level = "orf", eta2 = (H-k+1)/(n-k),
+           n_groups = k, n_obs = n, p_value = kw$p.value)
+  } else {
+    meta_match_ko |>
+      calc_eta2(lv)
+  }
+})
+
+results_hierarchy
+```
+
+```{r}
+tibble(
+  level = c("Phylum", "Class", "Order", "Family", "Genome", "ORF"),
+  eta2  = c(0.010, 0.017, 0.110, 0.138, 0.328, 0.835)
+) |>
+  mutate(level = factor(level, levels = c("Phylum", "Class", "Order", 
+                                           "Family", "Genome", "ORF"))) |>
+  ggplot(aes(x = level, y = eta2, fill = level)) +
+  geom_col(width = 0.6, alpha = 0.85) +
+  geom_text(aes(label = scales::percent(eta2, accuracy = 0.1)),
+            vjust = -0.5, size = 4, fontface = "bold") +
+  scale_fill_manual(values = c(
+    "Phylum" = "#D3D1C7",
+    "Class"  = "#C5C3BA",
+    "Order"  = "#9BC5B0",
+    "Family" = "#1D9E75",
+    "Genome" = "#0F6E56",
+    "ORF"    = "#085041"
+  )) +
+  scale_y_continuous(labels = scales::percent, limits = c(0, 0.95)) +
+  labs(x = NULL, y = "Variance explained (eta²)",
+       title = "Taxonomic resolution and metaT/metaP correlation",
+       subtitle = "Kruskal-Wallis eta² across taxonomic levels") +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none")
+```
+
+## PERMANOVA: ORF detection across omic layers
+
+Tests whether omic layer (metaP, metaT, metaG) explains significant differences in ORF presence/absence composition across the 10 samples with complete multi-omic coverage. Binary Jaccard distance is used throughout; permutations are restricted within samples (`strata = sample`) to account for the paired design.
+
+**Variable to create:** define `meta_perm` below with your sample grouping variable (e.g. `season`, `month`) to use as an additional covariate in the formula.
+
+```{r permanova-setup}
+#| label: permanova-setup
+#| message: false
+#| warning: false
+
+# ── Binary presence/absence (PA) matrices ──────────────────────────────────
+# Rows = samples, columns = ORFs, values = 0/1
+
+make_pa <- function(df, tpm_col, samples, orfs) {
+  df |>
+    filter(sample %in% samples, orf %in% orfs) |>
+    mutate(pa = as.integer(.data[[tpm_col]] > 0)) |>
+    select(sample, orf, pa) |>
+    pivot_wider(names_from = orf, values_from = pa, values_fill = 0L) |>
+    arrange(sample) |>
+    column_to_rownames("sample")
+}
+
+# Union of all ORFs detected in at least one layer across the 10 complete samples
+orfs_union <- meta_match |>
+  filter(sample %in% keep_samples) |>
+  filter(tpm_p > 0 | tpm_t > 0 | tpm_g > 0) |>
+  pull(orf) |>
+  unique()
+
+pa_p <- make_pa(mp, "tpm_p", keep_samples, orfs_union)
+pa_t <- make_pa(mt, "tpm_t", keep_samples, orfs_union)
+pa_g <- make_pa(mg, "tpm_g", keep_samples, orfs_union)
+
+# Align columns: fill ORFs absent from a layer with 0
+all_orf_cols <- sort(unique(c(colnames(pa_p), colnames(pa_t), colnames(pa_g))))
+
+fill_cols <- function(mat, all_cols) {
+  missing <- setdiff(all_cols, colnames(mat))
+  if (length(missing) > 0) mat[missing] <- 0L
+  mat[, all_cols]
+}
+
+pa_p <- fill_cols(pa_p, all_orf_cols)
+pa_t <- fill_cols(pa_t, all_orf_cols)
+pa_g <- fill_cols(pa_g, all_orf_cols)
+
+# Stack: 30 rows = 10 samples × 3 layers
+pa_stacked <- rbind(pa_p, pa_t, pa_g)
+
+# Metadata: layer grouping + paired sample ID
+# Add additional covariates here (e.g. season, month) if desired
+meta_perm <- tibble(
+  sample = c(rownames(pa_p), rownames(pa_t), rownames(pa_g)),
+  layer  = rep(c("metaP", "metaT", "metaG"), each = length(keep_samples))
+) |>
+  mutate(
+    sample = as.Date(sample),
+    layer  = factor(layer, levels = c("metaG", "metaT", "metaP"))
+  )
+
+cat("PA matrix:", nrow(pa_stacked), "rows ×", ncol(pa_stacked), "ORFs\n")
+cat("Detections per layer:\n")
+cat(" metaP:", sum(rowSums(pa_p) > 0), "samples with detections |",
+    sum(pa_p > 0), "total detections\n")
+cat(" metaT:", sum(rowSums(pa_t) > 0), "samples with detections |",
+    sum(pa_t > 0), "total detections\n")
+cat(" metaG:", sum(rowSums(pa_g) > 0), "samples with detections |",
+    sum(pa_g > 0), "total detections\n")
+```
+
+```{r permanova-overall}
+#| label: permanova-overall
+
+set.seed(42)
+perm_overall <- adonis2(
+  pa_stacked ~ layer,
+  data         = meta_perm,
+  strata       = meta_perm$sample,  # restrict permutations within samples
+  method       = "jaccard",
+  binary       = TRUE,
+  permutations = 999
+)
+perm_overall
+```
+
+**Observations — Overall PERMANOVA**
+
+```{r permanova-ordination}
+#| label: permanova-ordination
+#| fig-width: 7
+#| fig-height: 5
+
+# PCoA on Jaccard distances for visualisation
+jac_dist <- vegdist(pa_stacked, method = "jaccard", binary = TRUE)
+pcoa_res <- cmdscale(jac_dist, k = 2, eig = TRUE)
+
+pcoa_df <- as_tibble(pcoa_res$points, .name_repair = "minimal") |>
+  set_names("PC1", "PC2") |>
+  bind_cols(meta_perm)
+
+pct_var <- round(pcoa_res$eig / sum(pcoa_res$eig[pcoa_res$eig > 0]) * 100, 1)
+
+ggplot(pcoa_df, aes(x = PC1, y = PC2, color = layer, label = format(sample, "%y-%m"))) +
+  geom_point(size = 3, alpha = 0.85) +
+  geom_line(aes(group = sample), color = "grey70", linewidth = 0.4) +
+  ggrepel::geom_text_repel(size = 2.5, max.overlaps = 15) +
+  scale_color_manual(values = c(
+    "metaG" = "#0072B2",
+    "metaT" = "#E69F00",
+    "metaP" = "#CC79A7"
+  )) +
+  labs(
+    x     = paste0("PC1 (", pct_var[1], "%)"),
+    y     = paste0("PC2 (", pct_var[2], "%)"),
+    color = NULL,
+    title = "PCoA — Jaccard distance on ORF presence/absence",
+    subtitle = "Lines connect the same sample across layers"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "top")
+```
+
+```{r}
+# Campioni con metaT e metaP
+samples_mt_mp <- meta_match |>
+  filter(tpm_t > 0, tpm_p > 0) |>
+  distinct(sample) |>
+  pull(sample)
+length(samples_mt_mp)
+
+# Campioni con metaG e metaP
+samples_mg_mp <- meta_match |>
+  filter(tpm_g > 0, tpm_p > 0) |>
+  distinct(sample) |>
+  pull(sample)
+length(samples_mg_mp)
+
+# Campioni con tutti e tre
+samples_all <- meta_match |>
+  filter(tpm_t > 0, tpm_p > 0, tpm_g > 0) |>
+  distinct(sample) |>
+  pull(sample)
+length(samples_all)
+```

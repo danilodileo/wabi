@@ -1,0 +1,11 @@
+"0","# Scarica nomi pathway
+download.file(
+  ""https://rest.kegg.jp/list/pathway"",
+  ""pathway_names.txt""
+)
+"
+"2","trying URL 'https://rest.kegg.jp/list/pathway'
+"
+"2","downloaded 21 KB
+
+"
