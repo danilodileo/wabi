@@ -167,7 +167,7 @@ In general, mantel tests has a coefficient > 0.4 for all combinations which mean
 ### 15.7 Heatmaps
 Nice idea and it could be worth it to have them as supplementary but I would use only 17 samples and focus on visualising the differences!
 
-## 17 - 03 - 2025
+## 17 - 03 - 2026
 
 1. Among the 5k ORFs in metaP, how much they account for the % spectra. We have 40-60% of total proteome. but is the proteome the total spectra or only the 24,000 annotated ORFs?
 
