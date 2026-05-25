@@ -84,6 +84,7 @@ library(ggplotify)
 library("ComplexHeatmap")
 library(networkD3)
 library(htmltools)
+library(magrittr)
 ```
 
 ## Load datasets
@@ -1528,7 +1529,7 @@ ggplot(level_corr, aes(x = r_all_vs_matched,
 ```
 
 ```{r top10-genomes-metat-dynamics}
-# Top 10 genomi per TPM totale in metaT con presenza in metaP
+# Top 10 genomes per total TPM in metaT
 top10_genomes <- mt_10 |>
   left_join(taxonomy, join_by(orf)) |>
   filter(!is.na(genome)) |>
@@ -1540,7 +1541,7 @@ top10_genomes <- mt_10 |>
   slice_head(n = 10) |>
   pull(genome)
 
-# Ricalcola i livelli per top 10
+# Top 10
 level1_top10 <- mt_10 |>
   left_join(taxonomy, join_by(orf)) |>
   filter(genome %in% top10_genomes,
@@ -1598,7 +1599,7 @@ ggplot(all_levels_top10, aes(x = sample, y = tpm_norm,
 ```
 
 ```{r lm-correlation}
-# aggiungi varianza temporale come predictor
+# Add temporal variance as predictor
 orfs_variance <- meta_match_ko |>
   group_by(orf) |>
   summarise(
@@ -1607,10 +1608,10 @@ orfs_variance <- meta_match_ko |>
     cv_metaP = sd(tpm_p, na.rm = TRUE) / mean(tpm_p, na.rm = TRUE)
   )
 
-# correlazione tra varianza e concordanza
+# correlation varianza vs concordanza
 cor.test(orfs_variance$cv_metaT, orfs_variance$corr, method = "spearman")
 
-# modello con tutti i predictors
+# Model w all predictors
 model_data <- meta_match_ko |>
   group_by(orf, genome, family) |>
   summarise(
@@ -1648,13 +1649,13 @@ top_ko_divergent <- corr_mp_mt_ko |>
   ungroup() |>
   arrange(genome, desc(mean_corr))
 
-# Prepara label genus + family
+# Prepare label genus + family
 genus_family_label <- corr_mp_mt_ko |>
   filter(genome %in% divergent_genomes) |>
   distinct(genus, family) |>
   mutate(genus_label = paste0(genus, "\n(", family, ")"))
 
-# Join con top_ko_divergent
+# Join w top_ko_divergent
 top_ko_plot <- top_ko_divergent |>
   left_join(genus_family_label, by = "genus") |>
   mutate(
@@ -1663,6 +1664,7 @@ top_ko_plot <- top_ko_divergent |>
     ko_label = fct_reorder(ko_label, mean_corr)
   )
 
+# Plot the results
 ggplot(top_ko_plot, aes(x = mean_corr, y = ko_label, fill = genus)) +
   geom_col(width = 0.7) +
   geom_text(aes(label = round(mean_corr, 2)),
@@ -1714,7 +1716,7 @@ Overall, divergent genomes show ecologically interpretable functional signatures
 ## Do we still have good representation of highly expressed ORFs going from metaT to metaP?
 
 ```{r how-good-representation-metat-metap}
-# Rank ORF per TPM medio in metaT
+# Rank ORF per avg TPM in metaT
 orf_rank <- mt_10 |>
   group_by(orf) |>
   summarise(mean_tpm = mean(tpm_t, na.rm = TRUE)) |>
@@ -1725,8 +1727,7 @@ orf_rank <- mt_10 |>
     is_sign = orf %in% sig_orfs
   )
 
-library(magrittr)
-
+# Filter rank < 300
 orf_rank_plot <- orf_rank |>
   mutate(group = case_when(
     is_sign  ~ "Correlated ORFs",
@@ -1736,6 +1737,7 @@ orf_rank_plot <- orf_rank |>
   filter(mean_tpm > 0,
          rank < 300)
 
+# Plot the results
 ggplot() +
   geom_point(data = orf_rank_plot |> filter(group == "All metaT"),
              aes(x = rank, y = mean_tpm, color = group),
@@ -1764,7 +1766,7 @@ ggplot() +
 Among the top 300 most highly expressed ORFs in metaT, only a small fraction is detected in the metaP subset (blue dots) and even fewer show significant metaT/metaP correlation (pink dots). The most highly expressed ORFs in metaT (rank \< 10) are not represented in metaP at all. MetaP-matched ORFs appear from rank \~10 onwards but remain sparse, and correlated ORFs are only visible at rank \> 250 — among the lower end of the top 300. This confirms that metaP does not preferentially capture the most transcriptionally active ORFs in the community.
 
 ```{r distribution-abundance-metap-orfs}
-# Aggiungi percentile a orf_rank (su tutte le ORF, non solo top 300)
+# Add percentile of orf_rank
 orf_rank_full <- orf_rank |>
   filter(mean_tpm > 0) |>
   mutate(
@@ -1779,7 +1781,7 @@ orf_rank_full <- orf_rank |>
     )
   )
 
-# Calcola proporzione per percentile
+# Calculate proportion per percentile
 percentile_summary <- orf_rank_full |>
   group_by(percentile, group) |>
   summarise(n = n(), .groups = "drop") |>
@@ -1803,6 +1805,7 @@ ggplot(percentile_summary, aes(x = percentile, y = prop, fill = group)) +
   theme_minimal(base_size = 11) +
   theme(legend.position = "top")
 
+# Create summary table
 percentile_summary |>
   filter(group != "All metaT") |>
   ggplot(aes(x = percentile, y = prop, fill = group)) +
@@ -1824,7 +1827,7 @@ percentile_summary |>
 
 ```{r c-n-p-cycling}
 #| fig-height: 20
-# Definisci le categorie funzionali dal gene list
+# Define funtional categories
 functional_categories <- list(
   N_cycling    = c("K00370","K00371","K00374","K00368","K15864",
                    "K04561","K02305", "K03385","K02588","K02586",
@@ -1844,7 +1847,7 @@ functional_categories <- list(
                    "K03769","K16593","K16789","K17712")
 )
 
-# Controlla quali sono nelle correlazioni significative
+# check sign correlation
 sig_ko_list <- corr_mp_mt_ko |>
   filter(!is.na(ko), p_adjust < 0.05) |>
   distinct(ko, ko_def, corr, genome, family)
@@ -1871,7 +1874,7 @@ The analysis showed that we found only 2 KOs among all related to C,N,P cycling 
 
 ```{r c-n-p-all-5k-orfs}
 #| fig-height: 10
-# Delle ~5k ORF metaP-matched, quante hanno KO delle categorie funzionali?
+# how many KOs have annotation?
 meta_match_ko |>
   filter(!is.na(ko)) |>
   mutate(category = case_when(
@@ -1893,7 +1896,7 @@ meta_match_ko |>
   ) |>
   arrange(desc(n_orf))
 
-# ORF delle categorie funzionali nel subset metaP
+# ORFs w functional categories in subset metaP
 functional_orfs <- meta_match_ko |>  # dataset completo ~5k ORF
   filter(!is.na(ko)) |>
   mutate(category = case_when(
@@ -1913,7 +1916,7 @@ meta_match_ko <- meta_match_ko %>%
   filter(orf %in% functional_orfs$orf) %>%
   left_join(functional_orfs |> select(orf,category), join_by(orf))
 
-# Pivot long per i tre layer omici
+# Pivot long for the three layers
 functional_long <- meta_match_ko |>
   pivot_longer(
     cols = c(tpm_t, tpm_g, tpm_p),
@@ -1931,7 +1934,7 @@ functional_long <- meta_match_ko |>
   ) |>
   filter(!is.na(abundance), abundance > 0)
 
-# Normalizza 0-1 per ORF e layer
+# Normalise 0-1 per ORF and layer
 functional_norm <- functional_long |>
   group_by(orf, layer) |>
   mutate(abundance_norm = (abundance - min(abundance)) / 
@@ -2032,7 +2035,7 @@ The differential concordance between metaT and metaP across functional categorie
 corr_mp_mt_all_ko <- corr_mp_mt_all |>
   left_join(ko, join_by(orf))
 
-# Dividi le ~5k ORF in due gruppi
+# Divide ~5k ORFs in two groups
 orfs_correlated <- corr_mp_mt_all_ko |>
   left_join(ko, join_by(orf)) %>%
   filter(p_adjust < 0.05) |>
@@ -2044,7 +2047,7 @@ orfs_not_correlated <- corr_mp_mt_all_ko |>
   distinct(orf) |>
   pull(orf)
 
-# Per ogni pathway, conta ORF nei due gruppi
+# for each pathway, count ORFs in the two groups
 pathway_enrichment <- corr_mp_mt_all_ko |>
   left_join(ko_pathway, join_by(ko)) %>%
   left_join(pathway_names, join_by(pathway)) %>%
@@ -2064,6 +2067,8 @@ pathway_enrichment <- corr_mp_mt_all_ko |>
   ) |>
   arrange(p_adjust)
 
+
+# Plot the results
 pathway_enrichment |>
   filter(!is.na(name)) |>
   mutate(prop_corr = correlated / (correlated + not_correlated),
@@ -2153,7 +2158,7 @@ meta_match_ko |>
        title = "Distribution of metaT/metaP correlation by family") +
   theme_minimal(base_size = 10)
 
-# separa per metodo
+# separate by method
 meta_match_ko |>
   group_by(orf, family) |>
   summarise(
@@ -2191,11 +2196,11 @@ meta_match_ko |>
        title = "Proportion of concordant ORFs by family") +
   theme_minimal(base_size = 10)
 
-# Eta-squared per Kruskal-Wallis
+# Eta-squared by Kruskal-Wallis
 # eta^2 = (H - k + 1) / (n - k)
 # dove H = chi-squared, k = n gruppi, n = n totale osservazioni
 
-# n = numero totale di righe usate nel test
+# n = total number of rows used in the test
 # rifai il test sul dataframe corretto
 kw_data <- meta_match_ko |>
   group_by(orf, family) |>
@@ -2322,7 +2327,7 @@ meta_match_ko |>
 
 
 # Pielou's evenness = Shannon / log(S)
-# dove S = numero di ORF rilevate per campione
+# S = nuber of ORFs found in each sample
 
 evenness_df <- meta_match_ko |>
   group_by(sample) |>
@@ -2347,6 +2352,7 @@ evenness_df <- meta_match_ko |>
     J_metaP = "MetaP"
   ))
 
+# Plot the results
 ggplot(evenness_df, aes(x = layer, y = evenness, fill = layer)) +
   geom_boxplot(width = 0.4, alpha = 0.8) +
   geom_point(size = 2) +
@@ -2405,7 +2411,7 @@ ko_modules
 ```
 
 ```{r hierarchy-analysis}
-# Funzione per calcolare eta² per ogni livello tassonomico
+# eta² for each tax level
 calc_eta2 <- function(data, group_var, min_n = 20) {
   d <- data |>
     group_by(orf, across(all_of(group_var))) |>
@@ -2430,17 +2436,13 @@ calc_eta2 <- function(data, group_var, min_n = 20) {
   )
 }
 
-# Applica a tutti i livelli tassonomici
-# Assumi che taxonomy abbia colonne: orf, phylum, class, order, family, genome
 levels_to_test <- c("phylum", "class", "order", "family", "genome", "orf")
 
 results_hierarchy <- map_dfr(levels_to_test, function(lv) {
   if (lv == "orf") {
-    # A livello ORF ogni ORF è il suo proprio gruppo
-    # eta² = varianza spiegata dall'identità specifica dell'ORF
     d <- meta_match_ko |>
       group_by(orf) |>
-      filter(n() >= 5) |>  # almeno 5 timepoints
+      filter(n() >= 5) |> 
       ungroup()
     kw <- kruskal.test(corr ~ orf, data = d)
     H <- kw$statistic
@@ -2559,6 +2561,7 @@ cat(" metaG:", sum(rowSums(pa_g) > 0), "samples with detections |",
 ```{r permanova-overall}
 #| label: permanova-overall
 
+# Calculate permanova on samples
 set.seed(42)
 perm_overall <- adonis2(
   pa_stacked ~ layer,
@@ -2588,6 +2591,7 @@ pcoa_df <- as_tibble(pcoa_res$points, .name_repair = "minimal") |>
 
 pct_var <- round(pcoa_res$eig / sum(pcoa_res$eig[pcoa_res$eig > 0]) * 100, 1)
 
+# Plot the results
 ggplot(pcoa_df, aes(x = PC1, y = PC2, color = layer, label = format(sample, "%y-%m"))) +
   geom_point(size = 3, alpha = 0.85) +
   geom_line(aes(group = sample), color = "grey70", linewidth = 0.4) +
